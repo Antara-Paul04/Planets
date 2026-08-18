@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>a quiet universe</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="vignette"></div>
+    <div id="hint">drag to look around · scroll to zoom · click a planet or a distant sun to travel</div>
+    <button id="create-btn">make a planet</button>
+    <button id="find-btn" class="gone">find my planet</button>
+    <button id="jump-btn">jump to the nearest star</button>
+    <div id="planet-label" class="label-hidden">
+      <div class="label-name"></div>
+      <div class="label-sub"></div>
+    </div>
+    <div id="audio-ctl">
+      <button id="audio-btn" title="sound on">&#9834;</button>
+      <input id="audio-vol" type="range" min="0" max="100" />
+    </div>
+    <div id="toast">
+      <div class="toast-name"></div>
+      <div class="toast-sub">now somewhere in the universe</div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
