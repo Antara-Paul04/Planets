@@ -661,6 +661,7 @@ export function createCreator({ onLaunch, onPreview }) {
     overlay.classList.remove('open');
     stopPreview();
     rafOn = false;
+    launchSession += 1; // abandon any in-flight moderation verdict
   }
 
   $('.creator-close').addEventListener('click', close);
@@ -672,10 +673,12 @@ export function createCreator({ onLaunch, onPreview }) {
   // ORIGINAL rectangular artwork passes. Nothing is destroyed on review or
   // rejection -- the drawing stays right here.
   let launching = false;
+  let launchSession = 0; // closing the creator invalidates in-flight launches
   const launchBtn = $('.btn-launch');
   const statusEl = $('.creator-status');
   launchBtn.addEventListener('click', async () => {
     if (launching) return;
+    const mySession = launchSession;
     const name = nameInput.value.trim() || 'an unnamed world';
     painter.compose();
     const copy = document.createElement('canvas');
@@ -693,6 +696,7 @@ export function createCreator({ onLaunch, onPreview }) {
     launching = false;
     launchBtn.disabled = false;
     launchBtn.textContent = 'launch planet';
+    if (mySession !== launchSession) return; // creator was closed mid-check
 
     if (verdict.decision === 'rejected') {
       statusEl.textContent = "that drawing can't become a planet. try another one.";
@@ -701,7 +705,7 @@ export function createCreator({ onLaunch, onPreview }) {
     if (verdict.decision === 'review') {
       statusEl.textContent = verdict.offline || verdict.rateLimited
         ? 'your planet is being checked. try again in a moment.'
-        : "your planet is being checked — it'll appear once it's ready.";
+        : 'your planet needs another look before it can appear. try again in a little while.';
       return;
     }
 

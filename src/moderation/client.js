@@ -8,7 +8,10 @@
 //   'required'       - always call; unreachable means "review"
 //   'off'            - skip moderation entirely (local prototyping)
 
-const MODE = import.meta.env.VITE_MODERATION || 'auto';
+const RAW_MODE = import.meta.env.VITE_MODERATION || 'auto';
+// 'off' is a local-prototyping convenience only; production builds ignore it
+const MODE = RAW_MODE === 'off' && !import.meta.env.DEV ? 'auto' : RAW_MODE;
+if (RAW_MODE !== MODE) console.warn('[moderation] VITE_MODERATION=off is ignored in production builds');
 
 function flatten(canvas, w = 512, h = 256) {
   const c = document.createElement('canvas');

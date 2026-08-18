@@ -2,6 +2,7 @@ import { getConfig } from '../lib/moderation/config.js';
 import { validateSubmission } from '../lib/moderation/validate.js';
 import { checkRateLimit } from '../lib/moderation/ratelimit.js';
 import { runModeration } from '../lib/moderation/pipeline.js';
+import { submissionKey, cacheGet, cacheSet } from '../lib/moderation/cache.js';
 import { getStore } from '../lib/moderation/store.js';
 
 // POST /api/report
@@ -19,7 +20,7 @@ export default async function handler(req, res) {
 
   const cfg = getConfig();
   const ip = (req.headers['x-forwarded-for'] || 'unknown').split(',')[0].trim();
-  if (!checkRateLimit(`report:${ip}`, cfg)) {
+  if (!checkRateLimit(ip, cfg)) { // one shared budget per IP across endpoints
     res.status(429).json({ ok: true }); // reports are quiet even when limited
     return;
   }
@@ -32,10 +33,15 @@ export default async function handler(req, res) {
   if (typeof body.image === 'string') {
     const v = validateSubmission({ image: body.image, name }, cfg);
     if (v.ok) {
-      try {
-        recheck = (await runModeration({ image: v.image, name: v.name, cfg })).decision;
-      } catch {
-        recheck = 'review';
+      const key = submissionKey(v.image, v.name);
+      recheck = cacheGet(key, cfg);
+      if (!recheck) {
+        try {
+          recheck = (await runModeration({ image: v.image, name: v.name, cfg })).decision;
+          if (recheck !== 'review') cacheSet(key, recheck, cfg);
+        } catch {
+          recheck = 'review';
+        }
       }
     }
   }

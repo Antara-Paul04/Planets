@@ -41,7 +41,9 @@ export default async function handler(req, res) {
 
   try {
     const { decision } = await runModeration({ image: v.image, name: v.name, cfg });
-    cacheSet(key, decision, cfg);
+    // 'review' is often transient (provider hiccup) -- caching it would
+    // block clean art for a day; only settled verdicts are cached
+    if (decision !== 'review') cacheSet(key, decision, cfg);
     res.status(200).json({ decision });
   } catch {
     // pipeline-level failure: fail closed, reveal nothing

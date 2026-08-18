@@ -17,44 +17,52 @@ const ocr = (text, confidence = 0.9) => ({ ok: true, text, confidence });
 // ---------------- decision matrix (the conceptual table) ----------------
 
 test('image safe + no suspicious text = ALLOW', () => {
-  assert.equal(decide({ image: img(0.02), text: txt(0.01), ocr: ocr(''), failures: 0 }, cfg), APPROVED);
+  assert.equal(decide({ image: img(0.02), textName: txt(0.01), textOcr: null, ocr: ocr(''), failures: 0 }, cfg), APPROVED);
 });
 
 test('safe drawing with no text at all = ALLOW', () => {
-  assert.equal(decide({ image: img(0.05), text: null, ocr: ocr(''), failures: 0 }, cfg), APPROVED);
+  assert.equal(decide({ image: img(0.05), textName: null, textOcr: null, ocr: ocr(''), failures: 0 }, cfg), APPROVED);
 });
 
 test('image suspicious + text safe = REVIEW', () => {
-  assert.equal(decide({ image: img(0.55), text: txt(0.01), ocr: ocr(''), failures: 0 }, cfg), REVIEW);
+  assert.equal(decide({ image: img(0.55), textName: txt(0.01), textOcr: null, ocr: ocr(''), failures: 0 }, cfg), REVIEW);
 });
 
 test('image high-confidence unsafe = REJECT', () => {
-  assert.equal(decide({ image: img(0.95), text: txt(0.01), ocr: ocr(''), failures: 0 }, cfg), REJECTED);
+  assert.equal(decide({ image: img(0.95), textName: txt(0.01), textOcr: null, ocr: ocr(''), failures: 0 }, cfg), REJECTED);
 });
 
-test('text high-confidence unsafe = REJECT even when image is clean', () => {
-  assert.equal(decide({ image: img(0.02), text: txt(0.97), ocr: ocr('slur here'), failures: 0 }, cfg), REJECTED);
+test('unsafe NAME rejects regardless of OCR confidence', () => {
+  assert.equal(decide({ image: img(0.02), textName: txt(0.97), textOcr: null, ocr: ocr('', 0.1), failures: 0 }, cfg), REJECTED);
+});
+
+test('unsafe OCR text with confident OCR = REJECT', () => {
+  assert.equal(decide({ image: img(0.02), textName: null, textOcr: txt(0.97), ocr: ocr('slur here', 0.9), failures: 0 }, cfg), REJECTED);
+});
+
+test('unsafe OCR text with LOW-confidence OCR = REVIEW (one signal never hard-rejects)', () => {
+  assert.equal(decide({ image: img(0.02), textName: null, textOcr: txt(0.97), ocr: ocr('mayb slur?', 0.1), failures: 0 }, cfg), REVIEW);
 });
 
 test('borderline text = REVIEW, not reject', () => {
-  assert.equal(decide({ image: img(0.02), text: txt(0.6), ocr: ocr('edgy'), failures: 0 }, cfg), REVIEW);
+  assert.equal(decide({ image: img(0.02), textName: null, textOcr: txt(0.6), ocr: ocr('edgy'), failures: 0 }, cfg), REVIEW);
 });
 
 test('provider failure can never approve (fail closed)', () => {
-  assert.equal(decide({ image: img(0.01), text: txt(0.0), ocr: ocr(''), failures: 1 }, cfg), REVIEW);
+  assert.equal(decide({ image: img(0.01), textName: txt(0.0), textOcr: null, ocr: ocr(''), failures: 1 }, cfg), REVIEW);
 });
 
 test('missing image signal = REVIEW', () => {
-  assert.equal(decide({ image: null, text: txt(0.0), ocr: ocr(''), failures: 0 }, cfg), REVIEW);
+  assert.equal(decide({ image: null, textName: txt(0.0), textOcr: null, ocr: ocr(''), failures: 0 }, cfg), REVIEW);
 });
 
 test('unsafe image rejects even alongside provider failures', () => {
-  assert.equal(decide({ image: img(0.95), text: null, ocr: null, failures: 1 }, cfg), REJECTED);
+  assert.equal(decide({ image: img(0.95), textName: null, textOcr: null, ocr: null, failures: 1 }, cfg), REJECTED);
 });
 
 test('weird-but-harmless art is not penalized (low scores approve)', () => {
   // abstract blobs, innocent body-like shapes, odd doodles: low harm scores
-  assert.equal(decide({ image: img(0.3), text: txt(0.1), ocr: ocr('weird jokes', 0.4), failures: 0 }, cfg), APPROVED);
+  assert.equal(decide({ image: img(0.3), textName: txt(0.1), textOcr: txt(0.1), ocr: ocr('weird jokes', 0.4), failures: 0 }, cfg), APPROVED);
 });
 
 // ---------------- payload validation ----------------
@@ -146,6 +154,11 @@ test('pipeline: borderline text goes to review', async () => {
 
 test('pipeline: OCR provider failure fails closed to review', async () => {
   const r = await runModeration({ image: tinyPng, name: 'x __ocr_fail__', cfg: mockCfg });
+  assert.equal(r.decision, REVIEW);
+});
+
+test('pipeline: low-confidence unsafe OCR goes to review, not rejection', async () => {
+  const r = await runModeration({ image: tinyPng, name: 'x __lowconf_text__', cfg: mockCfg });
   assert.equal(r.decision, REVIEW);
 });
 
