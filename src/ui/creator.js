@@ -600,6 +600,7 @@ export function createCreator({ onLaunch, onPreview }) {
     if (previewPlanet) {
       p.scene.remove(previewPlanet.group);
       previewPlanet.surface.material.dispose();
+      if (previewPlanet.ringMaterial) previewPlanet.ringMaterial.dispose();
     }
     derived = deriveUserPlanet(config);
     p.texture.needsUpdate = true;
@@ -622,7 +623,7 @@ export function createCreator({ onLaunch, onPreview }) {
           previewPlanet.group.rotation.y += Math.max(0.004, Math.abs(p.spin.vx) * 0.9) * Math.sign(p.spin.vx || 1);
           p.spin.vx *= 0.95;
         }
-        if (previewPlanet.moonPivot) previewPlanet.moonPivot.rotation.y += 0.008;
+        for (const piv of previewPlanet.moonPivots) piv.rotation.y += piv.userData.speed * 0.016;
       }
       p.renderer.render(p.scene, p.camera);
       requestAnimationFrame(ploop);

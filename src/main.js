@@ -83,8 +83,8 @@ function restoreMyPlanet() {
     migrated = true;
   }
   const lk = saved.derived && saved.derived.look;
-  if (lk && (lk.rings && ((lk.moons && lk.moons.length) || lk.moon))) {
-    normalizeLook(lk);
+  if (lk && (lk.moon || (lk.rings && lk.moons && lk.moons.length))) {
+    normalizeLook(lk); // migrates legacy single-moon saves and resolves conflicts
     migrated = true;
   }
   if (migrated) {
@@ -113,7 +113,7 @@ function restoreMyPlanet() {
         (a, b) => a.position.distanceTo(position) - b.position.distanceTo(position)
       )[0];
       if (star) {
-        orbit = assignOrbit(star);
+        orbit = assignOrbit(star, Math.random, 0, orbitExtentOf(saved.derived.scale, saved.derived.look));
         position = orbitPosition(orbit, new THREE.Vector3());
         saved.solarSystemId = star.id;
         // write the adoption back so the planet stays put across reloads
@@ -269,7 +269,8 @@ const ndc = new THREE.Vector2();
 let downPos = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   downPos = [e.clientX, e.clientY];
-  if (!travel.active) focus.interrupt(); // grabbing mid-flight hands control back
+  if (travel.active) travel.cancel(); // touch-friendly cancel, decelerates smoothly
+  else focus.interrupt(); // grabbing mid-flight hands control back
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!downPos) return;

@@ -44,6 +44,7 @@ export class FocusController {
       tgtTo: target,
     };
     this.controls.enabled = false;
+    this.controls.minDistance = Math.max(3, planet.scale * 1.4); // can't dolly inside it
     this._trackPos.copy(planet.position);
     this.labelEl.querySelector('.label-name').textContent = planet.name || 'an unnamed world';
     this.labelEl.querySelector('.label-sub').textContent = bornLine(planet.createdAt);
@@ -58,6 +59,7 @@ export class FocusController {
     const dir = this.camera.position.clone().sub(target);
     if (dir.lengthSq() < 1e-6) dir.set(0, 0.2, 1);
     dir.normalize();
+    this.controls.minDistance = Math.max(3, star.radius * 1.6);
     const span = star.orbits.length ? Math.max(...star.orbits.map((o) => o.r)) * 1.45 : star.influence;
     const camTo = target.clone().addScaledVector(dir, span).add(new THREE.Vector3(0, span * 0.3, 0));
     this.anim = {
@@ -83,6 +85,7 @@ export class FocusController {
     this.current = null;
     this.anim = null;
     this.controls.enabled = true;
+    this.controls.minDistance = 3;
     this.labelEl.classList.add('label-hidden');
     // re-anchor the orbit pivot nearby so free space feels like floating,
     // not like swinging around a point left behind somewhere

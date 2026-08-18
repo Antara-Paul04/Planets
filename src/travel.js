@@ -193,6 +193,7 @@ export class TravelDirector {
     }
 
     if (this.audio) this.audio.travelStart();
+    return true;
   }
 
   cancel() {
