@@ -56,28 +56,6 @@ explore → make a planet → draw → make it yours → name → preview → la
   orbiting planets), minimal name label
 - `src/perf.js` — fps/draw-call readout + 50–1000 planet stress buttons (press `p`)
 
-## Content moderation (v12)
-
-Publishing is gated: when someone launches a planet, the ORIGINAL rectangular
-artwork (flattened to 512x256 PNG) plus the name goes to `/api/moderate` — a
-server-side Vercel function; provider keys never reach the browser. The
-pipeline runs image moderation and handwriting-capable OCR in parallel, then
-text-moderates extracted text + the name, and combines the signals through a
-configurable decision layer into approved / review / rejected. High-confidence
-unsafe rejects; anything ambiguous or any provider failure fails closed to
-review — never auto-approve, never delete. Rejection shows only a generic
-message. Providers are swappable behind `ImageModerator` / `OCRProvider` /
-`TextModerator` interfaces (`lib/moderation/providers/`): OpenAI
-omni-moderation for image+text, Google Vision OCR when configured (OpenAI
-vision transcription otherwise), and a deterministic mock (`MODERATION_MOCK=1`)
-for tests and keyless dev. Includes per-IP rate limiting, content-hash result
-caching, artwork-free structured logs, a report endpoint that records + 
-re-checks but never auto-hides, and a pluggable store (in-memory now, Supabase
-schema documented in `lib/moderation/store.js`). Set `OPENAI_API_KEY` in the
-deployment for live moderation; without it every submission fails closed to
-review. `npm test` covers the decision matrix, validation (no open proxy),
-rate limits, cache, and every pipeline path.
-
 ## Identity & satellites (v10-v11)
 
 Every planet carries a permanent `created_at` — seeded worlds are born at a

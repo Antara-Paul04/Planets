@@ -488,27 +488,3 @@ body.ambient #audio-ctl {
   transition: opacity 0.3s;
 }
 #audio-ctl:hover input[type="range"] { opacity: 0.8; }
-
-
-/* ---- moderation ---- */
-.creator-status {
-  text-align: center;
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 13.5px;
-  color: var(--ink-dim);
-  min-height: 20px;
-  margin-top: 14px;
-}
-.label-report {
-  display: block;
-  margin: 6px auto 0;
-  background: none; border: none;
-  font-family: var(--serif); font-style: italic;
-  font-size: 11px;
-  color: rgba(240, 234, 217, 0.3);
-  cursor: pointer;
-  pointer-events: auto; /* the label itself ignores the pointer */
-  transition: color 0.2s;
-}
-.label-report:hover { color: var(--ink-dim); }

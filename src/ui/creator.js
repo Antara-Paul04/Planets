@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildPlanetVisual, deriveUserPlanet, makeSurfaceMaterial } from '../galaxy/planets.js';
 import { Painter, applyPattern, addStars, addClouds, addDoodles, randomizeColors } from './painter.js';
-import { submitForModeration } from '../moderation/client.js';
 import { STAMPS, STAMP_NAMES, stampIcon } from './stamps.js';
 
 // The creation flow: draw -> make it yours -> preview -> launch.
@@ -150,7 +149,6 @@ export function createCreator({ onLaunch, onPreview }) {
         <h2 class="preview-name"></h2>
         <p class="creator-sub">drag to turn it over in your hands</p>
         <div class="preview-holder"></div>
-        <p class="creator-status"></p>
         <div class="step-nav">
           <button class="btn-ghost btn-back-style">keep tweaking</button>
           <button class="btn-primary btn-launch">launch planet</button>
@@ -661,7 +659,6 @@ export function createCreator({ onLaunch, onPreview }) {
     overlay.classList.remove('open');
     stopPreview();
     rafOn = false;
-    launchSession += 1; // abandon any in-flight moderation verdict
   }
 
   $('.creator-close').addEventListener('click', close);
@@ -669,46 +666,13 @@ export function createCreator({ onLaunch, onPreview }) {
   $('.btn-to-draw').addEventListener('click', () => showStep('draw'));
   $('.btn-to-preview').addEventListener('click', () => showStep('preview'));
   $('.btn-back-style').addEventListener('click', () => showStep('style'));
-  // moderation gates the launch: the planet is only created after the
-  // ORIGINAL rectangular artwork passes. Nothing is destroyed on review or
-  // rejection -- the drawing stays right here.
-  let launching = false;
-  let launchSession = 0; // closing the creator invalidates in-flight launches
-  const launchBtn = $('.btn-launch');
-  const statusEl = $('.creator-status');
-  launchBtn.addEventListener('click', async () => {
-    if (launching) return;
-    const mySession = launchSession;
+  $('.btn-launch').addEventListener('click', () => {
     const name = nameInput.value.trim() || 'an unnamed world';
     painter.compose();
     const copy = document.createElement('canvas');
     copy.width = CW;
     copy.height = CH;
     copy.getContext('2d').drawImage(painter.composite, 0, 0);
-
-    launching = true;
-    launchBtn.disabled = true;
-    launchBtn.textContent = 'creating your world…';
-    statusEl.textContent = '';
-
-    const verdict = await submitForModeration({ canvas: copy, name });
-
-    launching = false;
-    launchBtn.disabled = false;
-    launchBtn.textContent = 'launch planet';
-    if (mySession !== launchSession) return; // creator was closed mid-check
-
-    if (verdict.decision === 'rejected') {
-      statusEl.textContent = "that drawing can't become a planet. try another one.";
-      return;
-    }
-    if (verdict.decision === 'review') {
-      statusEl.textContent = verdict.offline || verdict.rateLimited
-        ? 'your planet is being checked. try again in a moment.'
-        : 'your planet needs another look before it can appear. try again in a little while.';
-      return;
-    }
-
     close();
     onLaunch({ name, canvas: copy, derived });
     painter.pushUndo();
@@ -719,7 +683,6 @@ export function createCreator({ onLaunch, onPreview }) {
     painter.markDirty();
     nameInput.value = '';
     textInput.value = '';
-    statusEl.textContent = '';
   });
 
   return {
