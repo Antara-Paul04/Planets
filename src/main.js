@@ -8,6 +8,7 @@ import { createPerfPanel } from './perf.js';
 import { createCreator } from './ui/creator.js';
 import { AmbientDirector } from './ambient.js';
 import { TravelDirector } from './travel.js';
+import { reportPlanet } from './moderation/client.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
 import { Soundscape } from './audio.js';
 
@@ -307,6 +308,22 @@ const perf = createPerfPanel({
   renderer,
   field,
   onSetCount: (n) => field.setRandomCount(n, rand),
+});
+
+// reporting a planet records it for review — it never hides anything by itself
+document.querySelector('#planet-label .label-report').addEventListener('click', () => {
+  const planet = focus.current;
+  if (!planet) return;
+  reportPlanet({
+    name: planet.name,
+    solarSystemId: planet.solarSystemId ?? null,
+    canvas: planet.isUser && planet.surface.material.map ? planet.surface.material.map.image : null,
+  });
+  clearTimeout(toastTimer);
+  toast.querySelector('.toast-name').textContent = 'thank you';
+  toast.querySelector('.toast-sub').textContent = "we'll take a look";
+  toast.classList.add('show');
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
 });
 
 setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);
