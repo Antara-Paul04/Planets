@@ -186,9 +186,14 @@ const creator = createCreator({
       clientRef, name, canvas,
       star: home, position: end, orbit, derived,
     });
+    if (remote.unavailable) {
+      universeStatus.classList.add('show');
+      return { failed: true, unavailable: true }; // nothing spawns, drawing kept
+    }
     if (remote.error) {
       return { failed: true }; // creator shows a gentle message, drawing kept
     }
+    universeStatus.classList.remove('show'); // the universe answered
 
     myPlanet = field.addUserPlanet({
       name, canvas, derived,
@@ -323,7 +328,10 @@ window.addEventListener('keydown', (e) => {
 
 // ---- the shared universe: planets other people have launched ----
 // One fetch at boot; hidden planets never arrive (excluded server-side).
-fetchSharedPlanets().then(async (rows) => {
+// In production, an unreachable backend shows the minimal unavailable state.
+const universeStatus = document.getElementById('universe-status');
+fetchSharedPlanets().then(async ({ planets: rows, unavailable }) => {
+  if (unavailable) universeStatus.classList.add('show');
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { /* fine */ }
   for (const row of rows) {
@@ -372,17 +380,28 @@ document.querySelector('#planet-label .label-report').addEventListener('click', 
   const planet = focus.current;
   if (!planet) return;
   clearTimeout(toastTimer);
-  toast.querySelector('.toast-name').textContent = 'reported';
-  toast.querySelector('.toast-sub').textContent = 'thanks';
+  if (planet.remoteId) {
+    // a report only reads as successful once it is actually recorded
+    const out = await reportPlanetRemote(planet.remoteId);
+    if (out && out.ok) {
+      toast.querySelector('.toast-name').textContent = 'reported';
+      toast.querySelector('.toast-sub').textContent = 'thanks';
+      if (out.hidden) {
+        focus.clear();
+        field.removePlanet(planet); // quietly gone — no celebration
+      }
+    } else {
+      toast.querySelector('.toast-name').textContent = 'the universe is temporarily unavailable';
+      toast.querySelector('.toast-sub').textContent = 'try again in a moment';
+      if (out && out.unavailable) universeStatus.classList.add('show');
+    }
+  } else {
+    // procedural worlds have nothing to record — the quiet ack is honest
+    toast.querySelector('.toast-name').textContent = 'reported';
+    toast.querySelector('.toast-sub').textContent = 'thanks';
+  }
   toast.classList.add('show');
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
-  if (planet.remoteId) {
-    const out = await reportPlanetRemote(planet.remoteId);
-    if (out && out.hidden) {
-      focus.clear();
-      field.removePlanet(planet); // quietly gone — no celebration
-    }
-  }
 });
 
 setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);

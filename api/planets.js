@@ -1,4 +1,4 @@
-import { getSupabase } from '../lib/db/supabase.js';
+import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 
 // GET /api/planets
 // The public universe query: VISIBLE planets only, only the fields the
@@ -14,6 +14,10 @@ export default async function handler(req, res) {
 
   const db = getSupabase();
   if (!db) {
+    if (isProductionStrict()) {
+      res.status(200).json({ planets: [], unavailable: true });
+      return;
+    }
     res.status(200).json({ planets: [], fallback: true });
     return;
   }
@@ -21,7 +25,7 @@ export default async function handler(req, res) {
   try {
     const out = await db.selectVisiblePlanets();
     if (!out.ok || !Array.isArray(out.json)) {
-      res.status(200).json({ planets: [], degraded: true });
+      res.status(200).json({ planets: [], degraded: true, unavailable: isProductionStrict() });
       return;
     }
     const planets = out.json.map((p) => ({
@@ -49,6 +53,6 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120');
     res.status(200).json({ planets });
   } catch {
-    res.status(200).json({ planets: [], degraded: true });
+    res.status(200).json({ planets: [], degraded: true, unavailable: isProductionStrict() });
   }
 }

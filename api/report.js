@@ -1,4 +1,4 @@
-import { getSupabase } from '../lib/db/supabase.js';
+import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { reporterIp } from '../lib/reports/ip.js';
 import { hashReporterIp } from '../lib/reports/hash.js';
 import { addReport } from '../lib/reports/store.js';
@@ -38,10 +38,19 @@ export default async function handler(req, res) {
   const ipHash = hashReporterIp(ip);
 
   const db = getSupabase();
+  if (!db && isProductionStrict()) {
+    // a report that cannot be recorded must never look successful
+    res.status(503).json({ error: 'universe_unavailable' });
+    return;
+  }
   try {
     let hidden = false;
     if (db) {
       const out = await db.rpcReportPlanet(planetId, ipHash);
+      if (!out.ok && isProductionStrict()) {
+        res.status(503).json({ error: 'universe_unavailable' });
+        return;
+      }
       if (out.ok && Array.isArray(out.json) && out.json[0]) {
         hidden = !!out.json[0].hidden;
       }
@@ -51,6 +60,10 @@ export default async function handler(req, res) {
     console.log(JSON.stringify({ at: 'report', ts: new Date().toISOString(), hidden }));
     res.status(200).json({ ok: true, hidden });
   } catch {
-    res.status(200).json({ ok: true, hidden: false }); // reports stay quiet
+    if (isProductionStrict()) {
+      res.status(503).json({ error: 'universe_unavailable' });
+      return;
+    }
+    res.status(200).json({ ok: true, hidden: false }); // dev reports stay quiet
   }
 }

@@ -13,7 +13,7 @@ import { _resetForTests } from '../lib/reports/store.js';
 // Supabase project -- see the manual checklist in the README.
 
 const realFetch = globalThis.fetch;
-const ENV_KEYS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'REPORT_IP_SALT'];
+const ENV_KEYS = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'REPORT_IP_SALT', 'VERCEL_ENV'];
 const savedEnv = {};
 
 beforeEach(() => {
@@ -224,6 +224,56 @@ test('report: invalid planet ids are rejected', async () => {
   const res = mockRes();
   await reportHandler({ method: 'POST', headers: {}, body: { planetId: 'nope' } }, res);
   assert.equal(res.statusCode, 400);
+});
+
+// ---------------- production strictness: one source of truth ----------------
+
+test('production: unconfigured create refuses instead of falling back', async () => {
+  for (const k of ENV_KEYS) delete process.env[k];
+  process.env.VERCEL_ENV = 'production';
+  const res = mockRes();
+  await createHandler({ method: 'POST', headers: {}, body: baseBody() }, res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.error, 'universe_unavailable');
+});
+
+test('production: unconfigured report refuses — never a fake success', async () => {
+  for (const k of ENV_KEYS) delete process.env[k];
+  process.env.VERCEL_ENV = 'production';
+  const res = mockRes();
+  await reportHandler({ method: 'POST', headers: { 'x-forwarded-for': '1.1.1.1' }, body: { planetId: REF } }, res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.ok, undefined);
+});
+
+test('production: report with failing database refuses instead of quiet-ok', async () => {
+  supaEnv();
+  process.env.VERCEL_ENV = 'production';
+  stubFetch([
+    ['rest/v1/rpc/report_planet', { status: 500, json: { message: 'down' } }],
+  ]);
+  const res = mockRes();
+  await reportHandler({ method: 'POST', headers: { 'x-forwarded-for': '1.1.1.1' }, body: { planetId: REF } }, res);
+  assert.equal(res.statusCode, 503);
+});
+
+test('production: unconfigured planets query flags unavailable', async () => {
+  for (const k of ENV_KEYS) delete process.env[k];
+  process.env.VERCEL_ENV = 'production';
+  const res = mockRes();
+  await planetsHandler({ method: 'GET', headers: {} }, res);
+  assert.equal(res.body.unavailable, true);
+  assert.deepEqual(res.body.planets, []);
+});
+
+test('development: unconfigured behavior is unchanged (fallbacks intact)', async () => {
+  for (const k of ENV_KEYS) delete process.env[k];
+  const resCreate = mockRes();
+  await createHandler({ method: 'POST', headers: {}, body: baseBody() }, resCreate);
+  assert.equal(resCreate.body.fallback, true);
+  const resReport = mockRes();
+  await reportHandler({ method: 'POST', headers: { 'x-forwarded-for': '5.5.5.5' }, body: { planetId: REF } }, resReport);
+  assert.equal(resReport.body.ok, true);
 });
 
 // ---------------- key hygiene ----------------

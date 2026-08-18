@@ -1,4 +1,4 @@
-import { getSupabase } from '../lib/db/supabase.js';
+import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { decodeArtwork } from '../lib/validate-image.js';
 
 // POST /api/create-planet
@@ -27,6 +27,11 @@ export default async function handler(req, res) {
 
   const db = getSupabase();
   if (!db) {
+    if (isProductionStrict()) {
+      // production has one source of truth -- creation cannot succeed
+      res.status(503).json({ error: 'universe_unavailable' });
+      return;
+    }
     res.status(200).json({ ok: false, fallback: true });
     return;
   }

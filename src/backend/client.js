@@ -1,7 +1,13 @@
 // Browser side of the backend. The client only ever talks to our own /api
-// endpoints -- no Supabase keys, no direct database access. When the
-// backend is not configured (local prototyping), every call degrades to
-// the app's original local-only behavior.
+// endpoints -- no Supabase keys, no direct database access.
+//
+// Local development: an unconfigured backend degrades to the app's
+// original local-only behavior (unchanged).
+// Production builds: the backend is the ONE source of truth. If it is
+// unconfigured or unreachable, operations return { unavailable: true }
+// and the app shows a minimal unavailable state instead of pretending.
+
+const IS_PROD = import.meta.env.PROD;
 
 function flatten(canvas, w = 512, h = 256) {
   const c = document.createElement('canvas');
@@ -52,24 +58,28 @@ export async function createPlanetRemote({ clientRef, name, canvas, star, positi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return { error: true };
+    if (res.status === 503) return { unavailable: true };
+    if (!res.ok) return IS_PROD ? { unavailable: true } : { error: true };
     const json = await res.json();
-    if (json.fallback) return { fallback: true };
+    if (json.fallback) return IS_PROD ? { unavailable: true } : { fallback: true };
     if (json.ok && json.planet) return { ok: true, planet: json.planet };
-    return { error: true };
+    return IS_PROD ? { unavailable: true } : { error: true };
   } catch {
-    return { error: true, offline: true };
+    return IS_PROD ? { unavailable: true } : { error: true, offline: true };
   }
 }
 
 export async function fetchSharedPlanets() {
   try {
     const res = await fetch('/api/planets');
-    if (!res.ok) return [];
+    if (!res.ok) return { planets: [], unavailable: IS_PROD };
     const json = await res.json();
-    return Array.isArray(json.planets) ? json.planets : [];
+    return {
+      planets: Array.isArray(json.planets) ? json.planets : [],
+      unavailable: !!json.unavailable || (IS_PROD && !!json.fallback),
+    };
   } catch {
-    return [];
+    return { planets: [], unavailable: IS_PROD };
   }
 }
 
@@ -80,10 +90,11 @@ export async function reportPlanetRemote(planetId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planetId }),
     });
-    if (!res.ok) return { ok: false };
+    if (res.status === 503) return { ok: false, unavailable: true };
+    if (!res.ok) return { ok: false, unavailable: IS_PROD };
     return await res.json();
   } catch {
-    return { ok: false };
+    return { ok: false, unavailable: IS_PROD };
   }
 }
 

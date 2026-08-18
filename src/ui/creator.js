@@ -694,7 +694,9 @@ export function createCreator({ onLaunch, onPreview }) {
     launchBtn.textContent = 'launch planet';
 
     if (result && result.failed) {
-      statusEl.textContent = "the universe didn't answer. try again in a moment.";
+      statusEl.textContent = result.unavailable
+        ? 'the universe is temporarily unavailable.'
+        : "the universe didn't answer. try again in a moment.";
       return;
     }
 
