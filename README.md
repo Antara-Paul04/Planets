@@ -56,6 +56,33 @@ explore → make a planet → draw → make it yours → name → preview → la
   orbiting planets), minimal name label
 - `src/perf.js` — fps/draw-call readout + 50–1000 planet stress buttons (press `p`)
 
+## Backend: Supabase persistence + reporting (v13-v14)
+
+User-created planets persist in Supabase (free plan): a `planets` table
+(UUID, name, birth date, star relationship, 3D position, orbit parameters,
+moons-XOR-rings config, visibility status), a `stars` table (deterministic
+suns; zero-planet stars are fine), and `planet_reports`. Artwork lives in
+the public-read `planet-artwork` Storage bucket (512x256 PNG, ~30-80KB,
+capped at 300KB) — the DB stores only `artwork_path`. The browser talks
+only to `/api/*` (Vercel functions); the service-role key is server-only;
+RLS is enabled with anon read access limited to visible planets and stars.
+
+The whole moderation rule: **three DIFFERENT IP addresses report a planet
+and it becomes hidden** — enforced atomically in the `report_planet()`
+Postgres function with a `(planet_id, reporter_ip_hash)` unique constraint.
+Reporter IPs are stored only as server-side HMAC digests; the client can
+never supply its own IP (trusted proxy headers only — Vercel overwrites
+`x-real-ip`/`x-forwarded-for`). Hidden planets keep their row and artwork
+but never leave the database through public queries. No accounts, no
+identities, nothing personal anywhere.
+
+Setup: create a free Supabase project, run
+`supabase/migrations/001_initial_schema.sql` in the SQL editor, then set
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and
+`REPORT_IP_SALT` (see `.env.example`). Without them the app runs exactly
+as before, local-only. World state is written once per creation; orbital
+motion stays client-side (no per-frame writes).
+
 ## Identity & satellites (v10-v11)
 
 Every planet carries a permanent `created_at` — seeded worlds are born at a

@@ -379,18 +379,7 @@ export class PlanetField {
   setRandomCount(n, rand) {
     const randoms = this.planets.filter((p) => !p.isUser);
     while (randoms.length > n) {
-      const p = randoms.pop();
-      this.group.remove(p.object);
-      if (p.orbit && this.stars[p.orbit.starId]) {
-        releaseOrbit(this.stars[p.orbit.starId], p.orbit, p.orbitLine);
-      }
-      if (p._aurora) {
-        const ai = this._auroras.indexOf(p._aurora);
-        if (ai >= 0) this._auroras.splice(ai, 1);
-        p._aurora.mat.dispose();
-      }
-      if (p._ringMat) p._ringMat.dispose();
-      this.planets.splice(this.planets.indexOf(p), 1);
+      this.removePlanet(randoms.pop());
     }
     let count = randoms.length;
     while (count < n) {
@@ -519,6 +508,21 @@ export class PlanetField {
       this._auroras.push(spec._aurora);
     }
     return spec;
+  }
+
+  removePlanet(p) {
+    this.group.remove(p.object);
+    if (p.orbit && this.stars[p.orbit.starId]) {
+      releaseOrbit(this.stars[p.orbit.starId], p.orbit, p.orbitLine);
+    }
+    if (p._aurora) {
+      const ai = this._auroras.indexOf(p._aurora);
+      if (ai >= 0) this._auroras.splice(ai, 1);
+      p._aurora.mat.dispose();
+    }
+    if (p._ringMat) p._ringMat.dispose();
+    const i = this.planets.indexOf(p);
+    if (i >= 0) this.planets.splice(i, 1);
   }
 
   findSpot(scale, radiusMult = 1, rand = Math.random) {

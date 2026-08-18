@@ -149,10 +149,12 @@ export function createCreator({ onLaunch, onPreview }) {
         <h2 class="preview-name"></h2>
         <p class="creator-sub">drag to turn it over in your hands</p>
         <div class="preview-holder"></div>
+        <p class="creator-status"></p>
         <div class="step-nav">
           <button class="btn-ghost btn-back-style">keep tweaking</button>
           <button class="btn-primary btn-launch">launch planet</button>
         </div>
+        <p class="creator-guidelines">planets reported by three different people are removed from the universe</p>
       </section>
     </div>`;
   document.body.appendChild(overlay);
@@ -666,15 +668,37 @@ export function createCreator({ onLaunch, onPreview }) {
   $('.btn-to-draw').addEventListener('click', () => showStep('draw'));
   $('.btn-to-preview').addEventListener('click', () => showStep('preview'));
   $('.btn-back-style').addEventListener('click', () => showStep('style'));
-  $('.btn-launch').addEventListener('click', () => {
+  // launching persists the planet first; if the universe doesn't answer,
+  // the drawing stays right here and nothing is lost
+  let launching = false;
+  const launchBtn = $('.btn-launch');
+  const statusEl = $('.creator-status');
+  launchBtn.addEventListener('click', async () => {
+    if (launching) return;
     const name = nameInput.value.trim() || 'an unnamed world';
     painter.compose();
     const copy = document.createElement('canvas');
     copy.width = CW;
     copy.height = CH;
     copy.getContext('2d').drawImage(painter.composite, 0, 0);
+
+    launching = true;
+    launchBtn.disabled = true;
+    launchBtn.textContent = 'launching…';
+    statusEl.textContent = '';
+
+    const result = await onLaunch({ name, canvas: copy, derived });
+
+    launching = false;
+    launchBtn.disabled = false;
+    launchBtn.textContent = 'launch planet';
+
+    if (result && result.failed) {
+      statusEl.textContent = "the universe didn't answer. try again in a moment.";
+      return;
+    }
+
     close();
-    onLaunch({ name, canvas: copy, derived });
     painter.pushUndo();
     painter.actx.clearRect(0, 0, CW, CH);
     painter.bg = '#1a1e30';
@@ -683,6 +707,7 @@ export function createCreator({ onLaunch, onPreview }) {
     painter.markDirty();
     nameInput.value = '';
     textInput.value = '';
+    statusEl.textContent = '';
   });
 
   return {

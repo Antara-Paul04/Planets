@@ -8,6 +8,7 @@ import { createPerfPanel } from './perf.js';
 import { createCreator } from './ui/creator.js';
 import { AmbientDirector } from './ambient.js';
 import { TravelDirector } from './travel.js';
+import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas } from './backend/client.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
 import { Soundscape } from './audio.js';
 
@@ -46,6 +47,7 @@ function saveMyPlanet(spec, canvas, derived) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       v: 1,
       name: spec.name,
+      remoteId: spec.remoteId || null,
       createdAt: spec.createdAt,
       position: spec.position.toArray(),
       orbit: spec.orbit
@@ -130,6 +132,7 @@ function restoreMyPlanet() {
       solarSystemId: saved.solarSystemId ?? (orbit ? orbit.starId : null),
       createdAt: saved.createdAt,
     });
+    if (saved.remoteId) myPlanet.remoteId = saved.remoteId;
     findBtn.classList.remove('gone');
   };
   img.src = saved.dataURL;
@@ -160,7 +163,7 @@ let toastTimer = null;
 
 const creator = createCreator({
   onPreview: () => audio.tick(),
-  onLaunch({ name, canvas, derived }) {
+  async onLaunch({ name, canvas, derived }) {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const start = camera.position.clone().addScaledVector(dir, 14);
@@ -175,13 +178,27 @@ const creator = createCreator({
     // user planets stay near the system plane — no surprise oddball tilt
     orbit.incl = home.plane.incl + Math.max(-0.18, Math.min(0.18, orbit.incl - home.plane.incl));
     const end = orbitPosition(orbit, new THREE.Vector3());
+
+    // persist first: the planet only exists once the universe accepts it.
+    // Unconfigured backend -> the original local-only flow, unchanged.
+    const clientRef = crypto.randomUUID();
+    const remote = await createPlanetRemote({
+      clientRef, name, canvas,
+      star: home, position: end, orbit, derived,
+    });
+    if (remote.error) {
+      return { failed: true }; // creator shows a gentle message, drawing kept
+    }
+
     myPlanet = field.addUserPlanet({
       name, canvas, derived,
       position: end,
       orbit,
       solarSystemId: home.id,
       travelFrom: start,
+      createdAt: remote.ok ? Date.parse(remote.planet.createdAt) : undefined,
     });
+    if (remote.ok) myPlanet.remoteId = remote.planet.id;
     saveMyPlanet(myPlanet, canvas, derived);
     findBtn.classList.remove('gone');
     audio.birth(); // something has just come into existence
@@ -196,6 +213,7 @@ const creator = createCreator({
       toast.classList.add('show');
       toastTimer = setTimeout(() => toast.classList.remove('show'), 4200);
     }, 2300);
+    return { ok: true };
   },
 });
 
@@ -303,10 +321,68 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// ---- the shared universe: planets other people have launched ----
+// One fetch at boot; hidden planets never arrive (excluded server-side).
+fetchSharedPlanets().then(async (rows) => {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { /* fine */ }
+  for (const row of rows) {
+    if (saved && saved.remoteId && row.id === saved.remoteId) continue; // mine spawns locally
+    if (!row.artworkUrl || row.position.x == null) continue;
+    try {
+      const canvas = await loadArtworkCanvas(row.artworkUrl);
+      const sc = row.satelliteConfig || {};
+      const spec = field.addUserPlanet({
+        name: row.name,
+        canvas,
+        derived: {
+          look: { atmo: sc.atmo || null, rings: sc.rings || null, moons: sc.moons || [] },
+          type: row.surfaceType || 'soft',
+          scale: row.scale || 2.4,
+          rotationSpeed: row.rotationSpeed || 0.12,
+          tilt: row.tilt || 0.25,
+          emissive: 0x000000,
+        },
+        position: new THREE.Vector3(row.position.x, row.position.y, row.position.z),
+        orbit: row.orbit && env.stars[row.starId] ? {
+          ...row.orbit,
+          starId: row.starId,
+          center: env.stars[row.starId].position.clone(),
+        } : null,
+        solarSystemId: row.starId,
+        createdAt: Date.parse(row.createdAt),
+      });
+      spec.remoteId = row.id;
+      if (spec.orbit && env.stars[row.starId]) {
+        claimOrbitRadius(env.stars[row.starId], spec.orbit.radius, orbitExtentOf(spec.scale, spec.look));
+      }
+    } catch { /* one bad row must not break the universe */ }
+  }
+}).catch(() => { /* degraded: procedural universe still works */ });
+
 const perf = createPerfPanel({
   renderer,
   field,
   onSetCount: (n) => field.setRandomCount(n, rand),
+});
+
+// reporting: three DIFFERENT people reporting a planet removes it.
+// The server derives the reporter identity; nothing personal is collected.
+document.querySelector('#planet-label .label-report').addEventListener('click', async () => {
+  const planet = focus.current;
+  if (!planet) return;
+  clearTimeout(toastTimer);
+  toast.querySelector('.toast-name').textContent = 'reported';
+  toast.querySelector('.toast-sub').textContent = 'thanks';
+  toast.classList.add('show');
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+  if (planet.remoteId) {
+    const out = await reportPlanetRemote(planet.remoteId);
+    if (out && out.hidden) {
+      focus.clear();
+      field.removePlanet(planet); // quietly gone — no celebration
+    }
+  }
 });
 
 setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);
