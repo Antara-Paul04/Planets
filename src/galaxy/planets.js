@@ -174,14 +174,7 @@ export function buildPlanetVisual(material, look) {
   const freeze = (o) => { o.updateMatrix(); o.matrixAutoUpdate = false; };
   freeze(surface);
 
-  let atmoMesh = null;
-  if (look.atmo) {
-    atmoMesh = new THREE.Mesh(GEO_HI, createAtmosphereMaterial(look.atmo.color, look.atmo.intensity));
-    atmoMesh.scale.setScalar(look.atmo.shell);
-    atmoMesh.raycast = noRaycast;
-    freeze(atmoMesh);
-    group.add(atmoMesh);
-  }
+  const atmoMesh = null; // atmosphere glow removed — a planet is just its surface
   let ringMaterial = null;
   if (normalizeLook(look).rings) {
     ringMaterial = makeRingMaterial(look.rings.color, look.rings.opacity, look.rings.inner, look.rings.outer, look.rings.seed || 1);
