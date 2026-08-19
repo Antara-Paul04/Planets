@@ -67,7 +67,7 @@ export default async function handler(req, res) {
   if (!candidates.length) { res.status(400).json({ error: 'no_candidate_stars' }); return; }
 
   const extent = Math.min(200, Math.max(1, num(b.extent) ?? 3));
-  const artworkPath = `planets/${b.clientRef}.png`;
+  const artworkPath = `planets/${b.clientRef}.${art.ext}`;
   const planet = {
     name,
     artwork_path: artworkPath,
@@ -91,7 +91,7 @@ export default async function handler(req, res) {
 
     // upload artwork unless this was an idempotent retry (already uploaded)
     if (!a.deduplicated) {
-      const up = await db.uploadArtwork(artworkPath, art.buffer);
+      const up = await db.uploadArtwork(artworkPath, art.buffer, art.contentType);
       if (!up.ok) {
         await db.deletePlanetByClientRef(b.clientRef); // no broken planet left behind
         res.status(500).json({ error: 'artwork_upload_failed' });

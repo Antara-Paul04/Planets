@@ -9,6 +9,13 @@
 
 const IS_PROD = import.meta.env.PROD;
 
+// try one encoding; browsers that can't encode a format silently hand back a
+// PNG data URL, so we confirm the mime prefix before trusting it
+function encode(canvas, mime, quality) {
+  const url = canvas.toDataURL(mime, quality);
+  return url.startsWith(`data:${mime}`) ? url : null;
+}
+
 function flatten(canvas, w = 512, h = 256) {
   const c = document.createElement('canvas');
   c.width = w;
@@ -17,7 +24,10 @@ function flatten(canvas, w = 512, h = 256) {
   ctx.fillStyle = '#1a1e30';
   ctx.fillRect(0, 0, w, h);
   ctx.drawImage(canvas, 0, 0, w, h);
-  return c.toDataURL('image/png');
+  // compressed formats are 5-10x smaller than PNG and identical on a distant
+  // sphere; the background is opaque so lossy encoding loses no transparency.
+  // PNG is the last-resort fallback for browsers that encode neither.
+  return encode(c, 'image/webp', 0.85) || encode(c, 'image/jpeg', 0.85) || c.toDataURL('image/png');
 }
 
 // world state only: the planet's permanent parameters, never frame state.
