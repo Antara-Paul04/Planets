@@ -146,3 +146,10 @@ create policy "public read visible planets" on planets
 insert into storage.buckets (id, name, public)
 values ('planet-artwork', 'planet-artwork', true)
 on conflict (id) do nothing;
+
+-- The report RPC is SECURITY DEFINER, so it bypasses RLS by design. It must
+-- therefore NOT be callable by anon/authenticated -- only the server (service
+-- role) may invoke it. Otherwise a client could call it directly with a
+-- forged ip_hash and defeat the three-distinct-IP rule.
+revoke all on function report_planet(uuid, text) from public, anon, authenticated;
+grant execute on function report_planet(uuid, text) to service_role;
