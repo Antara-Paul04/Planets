@@ -6,9 +6,10 @@
     <title>a quiet universe</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
-  <body>
+  <body class="intro">
     <div id="app"></div>
     <div id="vignette"></div>
+    <div id="intro-line">there are worlds out there</div>
     <div id="hint">drag to look around · scroll to zoom · click a planet or a distant sun to travel</div>
     <button id="create-btn">make a planet</button>
     <button id="find-btn" class="gone">find my planet</button>
@@ -22,6 +23,7 @@
       <button id="audio-btn" title="sound on">&#9834;</button>
       <input id="audio-vol" type="range" min="0" max="100" />
     </div>
+    <button id="info-btn" title="a note from the universe" aria-label="information">&#9432;</button>
     <div id="universe-status">the universe is temporarily unavailable</div>
     <div id="toast">
       <div class="toast-name"></div>

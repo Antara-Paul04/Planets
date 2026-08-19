@@ -6,6 +6,8 @@ import { FocusController } from './focus.js';
 import { createPerfPanel } from './perf.js';
 import { createCreator } from './ui/creator.js';
 import { AmbientDirector } from './ambient.js';
+import { IntroDirector } from './intro.js';
+import { createInfoSheet } from './ui/info.js';
 import { TravelDirector } from './travel.js';
 import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas } from './backend/client.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
@@ -24,14 +26,27 @@ const field = new PlanetField(scene, env.suns);
 const focus = new FocusController(camera, controls, document.getElementById('planet-label'));
 
 // the universe is enormous now — start the visitor inside a solar system,
-// not floating in the void at the origin
+// not floating in the void at the origin. On a first visit the intro drifts
+// the camera in from far out; returning visitors land here immediately.
+let intro = null;
 {
   const home0 = env.stars[0];
+  const restingPos = new THREE.Vector3();
+  const restingTarget = new THREE.Vector3();
   if (home0) {
     const span = Math.max(home0.influence, 120);
-    camera.position.copy(home0.position).add(new THREE.Vector3(span * 0.55, span * 0.4, span * 1.15));
-    controls.target.copy(home0.position);
+    restingPos.copy(home0.position).add(new THREE.Vector3(span * 0.55, span * 0.4, span * 1.15));
+    restingTarget.copy(home0.position);
+  } else {
+    restingPos.set(0, 14, 85);
   }
+  camera.position.copy(restingPos);
+  controls.target.copy(restingTarget);
+  intro = new IntroDirector({
+    camera, controls, restingPos, restingTarget,
+    lineEl: document.getElementById('intro-line'),
+    onReveal: () => document.body.classList.remove('intro'),
+  });
 }
 
 // ---- my planet: kept in localStorage so "find my planet" survives refresh ----
@@ -247,13 +262,20 @@ document.getElementById('create-btn').addEventListener('click', () => {
   creator.open();
 });
 
+// ---- the info sheet: opened only by choice, never blocks the universe ----
+const info = createInfoSheet();
+document.getElementById('info-btn').addEventListener('click', () => {
+  if (info.isOpen()) info.close();
+  else info.open();
+});
+
 // ---- ambient mode: the universe takes over when you stop ----
 const ambient = new AmbientDirector({
   camera,
   controls,
   field,
   stars: env.stars,
-  isBusy: () => creator.isOpen() || travel.active,
+  isBusy: () => creator.isOpen() || travel.active || (intro && intro.active) || info.isOpen(),
   onEnter: () => {
     focus.clear();
     document.body.classList.add('ambient');
@@ -289,19 +311,60 @@ syncAudioUI();
 // ---- interstellar travel for "find my planet" ----
 const travel = new TravelDirector({ camera, controls, renderer, scene, env, focus, audio });
 
-// ---- jump to the nearest star: hop to the most adjacent system ----
+// ---- jump to the nearest star: hop to a neighbouring system ----
+// A meaningful interstellar distance so we never bounce between two adjacent
+// suns. The universe places stars 2,600-18,000 apart, so ~1,500 comfortably
+// excludes "you're basically already there" without excluding real neighbours.
+const MIN_JUMP = 1500;
+const recentStars = []; // ids of the last couple of stars we jumped from — never bounce back into a short cycle
+
+// Choose the destination ONCE, at trigger time. The travel director then locks
+// it for the whole journey — no "nearest star" is re-evaluated mid-flight, so
+// the camera can never oscillate toward a star that drifts closer en route.
+function chooseJumpTarget() {
+  if (!env.stars.length) return null;
+  const cam = camera.position;
+  const facing = camera.getWorldDirection(new THREE.Vector3()).normalize();
+
+  // the star we're essentially sitting in (if any) — never pick it
+  const nearest = [...env.stars].sort(
+    (a, b) => a.position.distanceTo(cam) - b.position.distanceTo(cam)
+  )[0];
+  const span = nearest.orbits.length ? Math.max(...nearest.orbits.map((o) => o.r)) : nearest.influence;
+  const here = cam.distanceTo(nearest.position) < Math.max(nearest.influence, span * 1.8) ? nearest : null;
+
+  // candidates: not the current star, not one of the last couple we visited,
+  // and far enough to be a real journey. The exclusions guarantee we never
+  // oscillate back and forth between the same few neighbours.
+  const exclude = (s) => s === here || recentStars.includes(s.id);
+  const usable = env.stars.filter((s) => !exclude(s) && cam.distanceTo(s.position) >= MIN_JUMP);
+  let pool = usable;
+  if (!pool.length) pool = env.stars.filter((s) => !exclude(s));                 // relax distance
+  if (!pool.length) pool = env.stars.filter((s) => s !== here && s.id !== recentStars[recentStars.length - 1]); // keep only the immediate-previous exclusion
+  if (!pool.length) pool = env.stars.filter((s) => s !== here);                  // last resort
+  if (!pool.length) return null;
+
+  const scored = pool.map((s) => {
+    const to = s.position.clone().sub(cam);
+    return { s, d: to.length(), align: to.normalize().dot(facing) };
+  });
+  // prefer the nearest star roughly in front of us; else just the nearest
+  const forward = scored.filter((c) => c.align > 0.2).sort((a, b) => a.d - b.d);
+  const chosen = (forward[0] || scored.sort((a, b) => a.d - b.d)[0]).s;
+
+  // remember where we left from (keep the last 2, so cycles shorter than ~4 can't form)
+  const leftFrom = here ? here.id : nearest.id;
+  recentStars.push(leftFrom);
+  while (recentStars.length > 2) recentStars.shift();
+  return chosen;
+}
+
 document.getElementById('jump-btn').addEventListener('click', () => {
-  if (travel.active || creator.isOpen() || !env.stars.length) return;
-  const byDist = [...env.stars].sort(
-    (a, b) => a.position.distanceTo(camera.position) - b.position.distanceTo(camera.position)
-  );
-  // already at a system (even zoomed out framing it)? then "nearest"
-  // means the next one over — measured against the system's real extent
-  const here = byDist[0];
-  const span = here.orbits.length ? Math.max(...here.orbits.map((o) => o.r)) : here.influence;
-  const inSystem = camera.position.distanceTo(here.position) < Math.max(here.influence, span * 1.8);
-  const dest = inSystem && byDist.length > 1 ? byDist[1] : here;
+  if (travel.active || creator.isOpen()) return;
+  const dest = chooseJumpTarget();
+  if (!dest) return;
   focus.clear();
+  // travel locks `dest` for the whole flight; short hops use the focus glide
   if (!travel.begin(null, dest)) focus.focusStar(dest);
 });
 
@@ -435,9 +498,12 @@ setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);
 
 let elapsed = 0;
 const clock = new THREE.Clock();
+if (intro) intro.begin();
+
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   elapsed += dt;
+  if (intro) intro.update(dt);
   controls.update();
   ambient.update(dt);
   travel.update(dt);
@@ -459,4 +525,4 @@ renderer.setAnimationLoop(() => {
 });
 
 // debug handle for testing in the console (harmless in a prototype)
-window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel };
+window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info };
