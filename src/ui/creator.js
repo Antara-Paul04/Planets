@@ -1,53 +1,37 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildPlanetVisual, deriveUserPlanet, makeSurfaceMaterial } from '../galaxy/planets.js';
-import { Painter, applyPattern, addStars, addClouds, addDoodles, randomizeColors } from './painter.js';
-import { STAMPS, STAMP_NAMES, stampIcon } from './stamps.js';
+import { Painter } from './painter.js';
 
 // The creation flow: draw -> make it yours -> preview -> launch.
-// Drawing happens on a two-layer Painter (background + art) whose 1024x512
-// composite becomes the equirectangular planet texture. Strokes are drawn
-// three times (x-W, x, x+W) so artwork wraps seamlessly around the seam —
-// which is also how people discover that the rectangle wraps.
+//
+// The drawing step is deliberately small: one brush, a curated palette, a few
+// sizes, an eraser, and undo/redo/clear. Nothing else — the artwork should come
+// from the hand, not from a toolbox. The rectangle is the planet's surface, so
+// every stroke is drawn three times (x-W, x, x+W) and wraps seamlessly around
+// the seam. The 1024x512 art becomes the equirectangular planet texture.
 
 const CW = 1024;
 const CH = 512;
 
-const PALETTES = {
-  candy: ['#ff9fb2', '#ffd2a1', '#ffe08a', '#c79bff', '#8fb8ff'],
-  earth: ['#8fd07c', '#8a6f4d', '#e8dcc0', '#4f86c6', '#58b895'],
-  sunset: ['#ef9c4e', '#e2564a', '#e783a6', '#8a63d2', '#ffd2a1'],
-  ocean: ['#7fe3e0', '#4f86c6', '#58b8a5', '#1b2f55', '#a1e3ff'],
-  weird: ['#c6f24e', '#ff4fa3', '#ff8c42', '#c4b3f5', '#3ef2ff'],
-};
-const BASICS = ['#f5f1e8', '#1d2030'];
-
-const ATMO_PALETTE = ['#8fb8ff', '#ffd2a1', '#c79bff', '#9fe8d1', '#ff9fb2', '#ffe08a'];
-const VIBES = ['weird', 'peaceful', 'chaotic', 'tiny', 'lonely', 'hot', 'dreamy', 'mysterious', 'silly'];
-
-const SIZES = [4, 9, 16, 26, 40];
-const STAMP_SIZES = [26, 42, 64, 96, 140];
-const TEXT_SIZES = [20, 28, 40, 56, 80];
-const PATTERN_CELLS = [28, 40, 56, 84, 128];
-
-const FONTS = [
-  { name: 'bookish', css: 'Georgia, "Times New Roman", serif' },
-  { name: 'silly', css: '"Comic Sans MS", "Chalkboard SE", cursive' },
-  { name: 'typewriter', css: '"Courier New", monospace' },
-  { name: 'bubbly', css: '"Arial Rounded MT Bold", "Trebuchet MS", sans-serif' },
+// a small curated palette — enough range for oceans, deserts, ice and lava
+// without turning colour into a management tool
+const PALETTE = [
+  '#f5f1e8', '#ffe08a', '#ef9c4e', '#e2564a',
+  '#ff9fb2', '#c79bff', '#8fb8ff', '#4f86c6',
+  '#7fe3e0', '#58b895', '#8fd07c', '#1d2030',
 ];
 
-const STROKE_TOOLS = {
-  pencil:      { width: (s) => Math.max(1.4, s * 0.45), alpha: 1, jitter: 0.9, incremental: true },
-  pen:         { width: (s) => s, alpha: 1, incremental: true },
-  marker:      { width: (s) => s * 2.1, alpha: 0.45, incremental: false },
-  brush:       { width: (s) => s * 1.5, alpha: 0.92, soft: true, incremental: false },
-  highlighter: { width: (s) => s * 3, alpha: 0.26, cap: 'butt', incremental: false },
-  eraser:      { width: (s) => s * 2.3, alpha: 1, erase: true, incremental: true },
-};
-const SHAPE_TOOLS = ['line', 'box', 'circle', 'blob'];
-const TOOL_LIST = ['pencil', 'pen', 'marker', 'brush', 'highlighter', 'eraser', 'fill', 'line', 'box', 'circle', 'blob', 'stamp', 'pattern', 'text'];
-const PATTERN_LIST = ['dots', 'stripes', 'waves', 'checker', 'stars', 'grid', 'squiggles', 'circles'];
+// brush sizes, fine -> thick, shown as growing dots (never as numbers)
+const SIZES = [4, 11, 22, 40];
+
+// one smooth round brush, and an eraser that is just the brush in reverse
+const BRUSH = { width: (s) => s };
+const ERASER = { width: (s) => s * 1.5, erase: true };
+
+// --- style step (unchanged: these choices feed planet generation) ---
+const ATMO_PALETTE = ['#8fb8ff', '#ffd2a1', '#c79bff', '#9fe8d1', '#ff9fb2', '#ffe08a'];
+const VIBES = ['weird', 'peaceful', 'chaotic', 'tiny', 'lonely', 'hot', 'dreamy', 'mysterious', 'silly'];
 
 const chipRow = (cls, values, active) =>
   values.map((v) => `<button class="chip ${cls}" data-value="${v}" ${v === active ? 'data-on="1"' : ''}>${v}</button>`).join('');
@@ -62,56 +46,28 @@ export function createCreator({ onLaunch, onPreview }) {
       <button class="creator-close" title="Close">&times;</button>
 
       <section class="step step-draw">
-        <h2>draw the surface of your world</h2>
-        <p class="creator-sub">the left and right edges meet around the back</p>
-        <div class="draw-row">
-          <div class="canvas-wrap">
-            <canvas class="draw-canvas" width="${CW}" height="${CH}"></canvas>
-            <div class="brush-cursor"></div>
+        <h2>draw your planet</h2>
+        <p class="creator-sub">this rectangle is the surface — the left and right edges meet around the back</p>
+        <div class="draw-stage">
+          <canvas class="draw-canvas" width="${CW}" height="${CH}"></canvas>
+          <div class="brush-cursor"></div>
+        </div>
+        <div class="draw-tools">
+          <div class="mode-group">
+            <button class="mode-btn m-brush" data-on="1">brush</button>
+            <button class="mode-btn m-eraser">eraser</button>
           </div>
-          <div class="mini-preview">
-            <div class="mini-holder"></div>
-            <p>it wraps like this</p>
+          <div class="size-dots" title="brush size">
+            ${SIZES.map((s, i) => `<button class="size-dot" data-i="${i}" ${i === 1 ? 'data-on="1"' : ''}><span style="width:${4 + i * 4}px;height:${4 + i * 4}px"></span></button>`).join('')}
+          </div>
+          <div class="palette">
+            ${PALETTE.map((c, i) => `<button class="swatch" data-value="${c}" style="background:${c}" ${i === 1 ? 'data-on="1"' : ''} aria-label="colour"></button>`).join('')}
           </div>
         </div>
-        <div class="toolbar tools-row">
-          ${TOOL_LIST.map((t) => `<button class="chip c-tool" data-value="${t}" ${t === 'pencil' ? 'data-on="1"' : ''}>${t}</button>`).join('')}
-        </div>
-        <div class="toolbar ctl-row">
-          <span class="size-dots">
-            ${SIZES.map((s, i) => `<button class="size-dot" data-i="${i}" ${i === 1 ? 'data-on="1"' : ''}><span style="width:${5 + i * 4}px;height:${5 + i * 4}px"></span></button>`).join('')}
-          </span>
-          <span class="toolbar-sep"></span>
-          <label class="opacity-label">ink <input type="range" class="opacity-range" min="15" max="100" value="100" /></label>
-          <span class="toolbar-sep"></span>
-          <span class="sym-chips">
-            ${chipRow('c-sym', ['no mirror', '↔', '↕', '✳'], 'no mirror')}
-          </span>
-        </div>
-        <div class="toolbar color-row">
-          <span class="palette-tabs">${chipRow('c-pal', Object.keys(PALETTES), 'candy')}</span>
-          <span class="swatches"></span>
-          <input type="color" class="color-picker" value="#ff9fb2" title="any color you like" />
-        </div>
-        <div class="tray stamps-tray hidden"></div>
-        <div class="tray pattern-tray hidden">
-          ${chipRow('c-pattern', PATTERN_LIST, null)}
-          <span class="tray-hint">tap one to print it — size dots set the scale</span>
-        </div>
-        <div class="text-row hidden">
-          <input class="text-input" maxlength="40" placeholder="type something, then click the canvas to place it" />
-          <span class="font-chips">${FONTS.map((f, i) => `<button class="chip c-font" data-value="${i}" ${i === 0 ? 'data-on="1"' : ''} style="font-family:${f.css.replace(/"/g, '&quot;')}">${f.name}</button>`).join('')}</span>
-        </div>
-        <div class="toolbar helpers-row">
-          <button class="helper h-bg">fill background</button>
-          <button class="helper h-stars">add stars</button>
-          <button class="helper h-clouds">add clouds</button>
-          <button class="helper h-doodle">random doodles</button>
-          <button class="helper h-shuffle">shuffle colors</button>
-          <span class="toolbar-sep"></span>
-          <button class="tool tool-undo">undo</button>
-          <button class="tool tool-redo">redo</button>
-          <button class="tool tool-clear">clear</button>
+        <div class="draw-actions">
+          <button class="act act-undo" title="undo">&#8630;</button>
+          <button class="act act-redo" title="redo">&#8631;</button>
+          <button class="act act-clear" title="clear the canvas">clear</button>
         </div>
         <div class="step-nav">
           <button class="btn-primary btn-to-style">next — make it yours</button>
@@ -164,135 +120,34 @@ export function createCreator({ onLaunch, onPreview }) {
   const canvas = $('.draw-canvas');
   const displayCtx = canvas.getContext('2d');
   const cursorEl = $('.brush-cursor');
-  const textInput = $('.text-input');
   const nameInput = $('.name-input');
-  const colorPicker = $('.color-picker');
 
   const painter = new Painter(CW, CH);
 
   // ---------- tool state ----------
-  let tool = 'pencil';
+  let tool = 'brush'; // 'brush' | 'eraser'
   let sizeIdx = 1;
-  let opacity = 1;
-  let color = PALETTES.candy[0];
-  let symmetry = 'off'; // off | v | h | r
-  let fontIdx = 0;
-  let stampName = 'star';
-  let paletteName = 'candy';
+  let color = PALETTE[1];
 
-  const curPalette = () => [...PALETTES[paletteName], ...BASICS];
-
-  // ---------- symmetry + wrap plumbing ----------
-  const variantsOf = (pts) => {
-    const out = [pts];
-    if (symmetry === 'v' || symmetry === 'r') out.push(pts.map((p) => ({ x: CW - p.x, y: p.y })));
-    if (symmetry === 'h' || symmetry === 'r') out.push(pts.map((p) => ({ x: p.x, y: CH - p.y })));
-    if (symmetry === 'r') out.push(pts.map((p) => ({ x: CW - p.x, y: CH - p.y })));
-    return out;
-  };
-
+  // ---------- the one brush, wrapped across the seam ----------
   function tracePath(ctx, pts, dx) {
     ctx.beginPath();
     ctx.moveTo(pts[0].x + dx, pts[0].y);
-    if (pts.length === 1) ctx.lineTo(pts[0].x + dx + 0.01, pts[0].y + 0.01);
+    if (pts.length === 1) ctx.lineTo(pts[0].x + dx + 0.01, pts[0].y + 0.01); // a tap leaves a dot
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x + dx, pts[i].y);
   }
 
-  function strokeAllVariants(pts, cfg) {
+  function strokeSeam(pts) {
+    const cfg = tool === 'eraser' ? ERASER : BRUSH;
     const ctx = painter.actx;
     ctx.save();
-    ctx.globalAlpha = cfg.alpha * opacity;
     ctx.globalCompositeOperation = cfg.erase ? 'destination-out' : 'source-over';
     ctx.strokeStyle = color;
     ctx.lineWidth = cfg.width(SIZES[sizeIdx]);
-    ctx.lineCap = cfg.cap || 'round';
-    ctx.lineJoin = 'round';
-    if (cfg.soft) {
-      ctx.shadowColor = color;
-      ctx.shadowBlur = SIZES[sizeIdx] * 0.7;
-    }
-    for (const varPts of variantsOf(pts)) {
-      for (const dx of [-CW, 0, CW]) {
-        tracePath(ctx, varPts, dx);
-        ctx.stroke();
-      }
-    }
-    ctx.restore();
-    painter.markDirty();
-  }
-
-  function drawShapeAllVariants(a, b, kind) {
-    const ctx = painter.actx;
-    ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = Math.max(2, SIZES[sizeIdx] * 0.8);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    for (const [va, vb] of variantsOf([a, b]).map((v) => [v[0], v[1]])) {
-      for (const dx of [-CW, 0, CW]) {
-        ctx.beginPath();
-        if (kind === 'line') {
-          ctx.moveTo(va.x + dx, va.y);
-          ctx.lineTo(vb.x + dx, vb.y);
-          ctx.stroke();
-        } else if (kind === 'box') {
-          ctx.strokeRect(Math.min(va.x, vb.x) + dx, Math.min(va.y, vb.y), Math.abs(vb.x - va.x), Math.abs(vb.y - va.y));
-        } else {
-          ctx.ellipse((va.x + vb.x) / 2 + dx, (va.y + vb.y) / 2, Math.abs(vb.x - va.x) / 2 || 1, Math.abs(vb.y - va.y) / 2 || 1, 0, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      }
-    }
-    ctx.restore();
-    painter.markDirty();
-  }
-
-  function fillBlobAllVariants(pts) {
-    const ctx = painter.actx;
-    ctx.save();
-    ctx.globalAlpha = opacity * 0.9;
-    ctx.fillStyle = color;
-    for (const varPts of variantsOf(pts)) {
-      for (const dx of [-CW, 0, CW]) {
-        tracePath(ctx, varPts, dx);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-    ctx.restore();
-    painter.markDirty();
-  }
-
-  function placeStamp(p) {
-    painter.pushUndo();
-    const ctx = painter.actx;
-    const s = STAMP_SIZES[sizeIdx];
-    for (const [v] of variantsOf([p]).map((x) => [x[0]])) {
-      for (const dx of [-CW, 0, CW]) {
-        ctx.save();
-        ctx.globalAlpha = opacity;
-        ctx.translate(v.x + dx, v.y);
-        ctx.rotate((Math.random() - 0.5) * 0.7);
-        STAMPS[stampName](ctx, s, color);
-        ctx.restore();
-      }
-    }
-    painter.markDirty();
-  }
-
-  function placeText(p) {
-    const text = textInput.value.trim();
-    if (!text) { textInput.focus(); return; }
-    painter.pushUndo();
-    const ctx = painter.actx;
-    ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.fillStyle = color;
-    ctx.font = `600 ${TEXT_SIZES[sizeIdx]}px ${FONTS[fontIdx].css}`;
-    ctx.textAlign = 'center';
-    for (const dx of [-CW, 0, CW]) ctx.fillText(text, p.x + dx, p.y);
+    // draw the same path one canvas-width left and right so it meets itself
+    for (const dx of [-CW, 0, CW]) { tracePath(ctx, pts, dx); ctx.stroke(); }
     ctx.restore();
     painter.markDirty();
   }
@@ -300,77 +155,38 @@ export function createCreator({ onLaunch, onPreview }) {
   // ---------- pointer handling ----------
   let drawing = false;
   let strokePts = [];
-  let strokeStart = null;
-  let strokeSnapshot = null; // ImageData of art layer before this gesture
 
   function canvasPos(e) {
     const r = canvas.getBoundingClientRect();
     return { x: ((e.clientX - r.left) / r.width) * CW, y: ((e.clientY - r.top) / r.height) * CH };
   }
-  const jitterPt = (p, amt) => ({ x: p.x + (Math.random() - 0.5) * amt, y: p.y + (Math.random() - 0.5) * amt });
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    const p = canvasPos(e);
-    if (tool === 'stamp') { placeStamp(p); return; }
-    if (tool === 'text') { placeText(p); return; }
-    if (tool === 'fill') {
-      painter.pushUndo();
-      for (const [v] of variantsOf([p]).map((x) => [x[0]])) painter.floodFill(v.x, v.y, color);
-      return;
-    }
-    if (tool === 'pattern') return; // patterns come from the tray
     painter.pushUndo();
     drawing = true;
     canvas.setPointerCapture(e.pointerId);
-    if (SHAPE_TOOLS.includes(tool)) {
-      strokeStart = p;
-      strokePts = [p];
-      strokeSnapshot = painter.actx.getImageData(0, 0, CW, CH);
-      return;
-    }
-    const cfg = STROKE_TOOLS[tool];
-    strokePts = [cfg.jitter ? jitterPt(p, cfg.jitter * 2) : p];
-    strokeSnapshot = cfg.incremental ? null : painter.actx.getImageData(0, 0, CW, CH);
-    strokeAllVariants(strokePts, cfg);
+    strokePts = [canvasPos(e)];
+    strokeSeam(strokePts); // lay down the first dab immediately (low latency)
   });
 
   canvas.addEventListener('pointermove', (e) => {
     updateCursor(e);
     if (!drawing) return;
-    const p = canvasPos(e);
-    if (SHAPE_TOOLS.includes(tool)) {
-      strokePts.push(p);
-      painter.actx.putImageData(strokeSnapshot, 0, 0);
-      if (tool === 'blob') fillBlobAllVariants(strokePts);
-      else drawShapeAllVariants(strokeStart, p, tool);
-      return;
-    }
-    const cfg = STROKE_TOOLS[tool];
-    strokePts.push(cfg.jitter ? jitterPt(p, cfg.jitter * 2) : p);
-    if (cfg.incremental) {
-      strokeAllVariants(strokePts.slice(-2), cfg);
-    } else {
-      painter.actx.putImageData(strokeSnapshot, 0, 0);
-      strokeAllVariants(strokePts, cfg);
-    }
+    strokePts.push(canvasPos(e));
+    strokeSeam(strokePts.slice(-2)); // extend by just the new segment
   });
 
   window.addEventListener('pointerup', () => {
     drawing = false;
     strokePts = [];
-    strokeStart = null;
-    strokeSnapshot = null;
   });
 
-  // brush-size cursor ring
+  // a responsive ring that shows the true brush footprint
   function updateCursor(e) {
     const r = canvas.getBoundingClientRect();
-    const cfg = STROKE_TOOLS[tool];
-    let d;
-    if (cfg) d = cfg.width(SIZES[sizeIdx]) * (r.width / CW);
-    else if (tool === 'stamp') d = STAMP_SIZES[sizeIdx] * (r.width / CW);
-    else d = Math.max(6, SIZES[sizeIdx] * 0.8 * (r.width / CW));
+    const cfg = tool === 'eraser' ? ERASER : BRUSH;
+    const d = cfg.width(SIZES[sizeIdx]) * (r.width / CW);
     cursorEl.style.width = cursorEl.style.height = `${Math.max(4, d)}px`;
     cursorEl.style.left = `${e.clientX - r.left}px`;
     cursorEl.style.top = `${e.clientY - r.top}px`;
@@ -378,25 +194,15 @@ export function createCreator({ onLaunch, onPreview }) {
   canvas.addEventListener('pointerenter', () => { cursorEl.style.opacity = '1'; });
   canvas.addEventListener('pointerleave', () => { cursorEl.style.opacity = '0'; });
 
-  // ---------- toolbar wiring ----------
-  const bindChips = (cls, onPick, allowOff = false) => {
-    $$('.' + cls).forEach((b) => {
-      b.addEventListener('click', () => {
-        const turnOff = allowOff && b.dataset.on === '1';
-        $$('.' + cls).forEach((x) => (x.dataset.on = ''));
-        if (!turnOff) b.dataset.on = '1';
-        onPick(turnOff ? null : b.dataset.value);
-      });
-    });
-  };
-
-  bindChips('c-tool', (v) => {
-    tool = v === 'eraser' ? 'eraser' : v;
-    $('.stamps-tray').classList.toggle('hidden', v !== 'stamp');
-    $('.pattern-tray').classList.toggle('hidden', v !== 'pattern');
-    $('.text-row').classList.toggle('hidden', v !== 'text');
-    if (v === 'text') textInput.focus();
-  });
+  // ---------- draw-step controls ----------
+  const modeBtns = { brush: $('.m-brush'), eraser: $('.m-eraser') };
+  function setMode(m) {
+    tool = m;
+    modeBtns.brush.dataset.on = m === 'brush' ? '1' : '';
+    modeBtns.eraser.dataset.on = m === 'eraser' ? '1' : '';
+  }
+  modeBtns.brush.addEventListener('click', () => setMode('brush'));
+  modeBtns.eraser.addEventListener('click', () => setMode('eraser'));
 
   $$('.size-dot').forEach((b) => {
     b.addEventListener('click', () => {
@@ -405,63 +211,40 @@ export function createCreator({ onLaunch, onPreview }) {
       sizeIdx = Number(b.dataset.i);
     });
   });
-  $('.opacity-range').addEventListener('input', (e) => { opacity = Number(e.target.value) / 100; });
 
-  const SYM_MAP = { 'no mirror': 'off', '↔': 'v', '↕': 'h', '✳': 'r' };
-  bindChips('c-sym', (v) => { symmetry = SYM_MAP[v] || 'off'; });
-
-  const swatchHolder = $('.swatches');
-  function renderSwatches() {
-    swatchHolder.innerHTML = dotRow('swatch', curPalette(), color);
-    swatchHolder.querySelectorAll('.swatch').forEach((b) => {
-      b.addEventListener('click', () => {
-        color = b.dataset.value;
-        colorPicker.value = new (function () { const c = document.createElement('canvas').getContext('2d'); c.fillStyle = color; return { v: c.fillStyle }; })().v;
-        swatchHolder.querySelectorAll('.swatch').forEach((x) => (x.dataset.on = x === b ? '1' : ''));
-      });
+  // colour is a single interaction; picking one also drops you out of erasing
+  $$('.swatch').forEach((b) => {
+    b.addEventListener('click', () => {
+      color = b.dataset.value;
+      $$('.swatch').forEach((x) => (x.dataset.on = x === b ? '1' : ''));
+      if (tool === 'eraser') setMode('brush');
     });
+  });
+
+  $('.act-undo').addEventListener('click', () => painter.undo());
+  $('.act-redo').addEventListener('click', () => painter.redo());
+
+  // clear is secondary and asks once, so a planet is never lost by accident
+  const clearBtn = $('.act-clear');
+  let clearArmed = false;
+  let clearTimer = null;
+  function disarmClear() {
+    clearArmed = false;
+    clearBtn.dataset.armed = '';
+    clearBtn.textContent = 'clear';
+    clearTimeout(clearTimer);
   }
-  bindChips('c-pal', (v) => { paletteName = v; renderSwatches(); });
-  renderSwatches();
-  colorPicker.addEventListener('input', () => {
-    color = colorPicker.value;
-    swatchHolder.querySelectorAll('.swatch').forEach((x) => (x.dataset.on = ''));
+  clearBtn.addEventListener('click', () => {
+    if (!clearArmed) {
+      clearArmed = true;
+      clearBtn.dataset.armed = '1';
+      clearBtn.textContent = 'clear everything?';
+      clearTimer = setTimeout(disarmClear, 3000);
+      return;
+    }
+    painter.clearArt();
+    disarmClear();
   });
-
-  // stamps tray
-  const stampsTray = $('.stamps-tray');
-  STAMP_NAMES.forEach((name) => {
-    const b = document.createElement('button');
-    b.className = 'stamp-btn';
-    b.title = name;
-    if (name === stampName) b.dataset.on = '1';
-    b.appendChild(stampIcon(name));
-    b.addEventListener('click', () => {
-      stampName = name;
-      stampsTray.querySelectorAll('.stamp-btn').forEach((x) => (x.dataset.on = x === b ? '1' : ''));
-    });
-    stampsTray.appendChild(b);
-  });
-
-  // patterns tray — tapping a pattern prints it immediately (undoable)
-  $$('.c-pattern').forEach((b) => {
-    b.addEventListener('click', () => {
-      applyPattern(painter, b.dataset.value, PATTERN_CELLS[sizeIdx], color, Math.min(0.85, 0.4 + opacity * 0.4));
-    });
-  });
-
-  bindChips('c-font', (v) => { fontIdx = Number(v); });
-
-  // helpers
-  $('.h-bg').addEventListener('click', () => painter.setBackground(color));
-  $('.h-stars').addEventListener('click', () => addStars(painter, curPalette()));
-  $('.h-clouds').addEventListener('click', () => addClouds(painter));
-  $('.h-doodle').addEventListener('click', () => addDoodles(painter, curPalette()));
-  $('.h-shuffle').addEventListener('click', () => randomizeColors(painter));
-
-  $('.tool-undo').addEventListener('click', () => painter.undo());
-  $('.tool-redo').addEventListener('click', () => painter.redo());
-  $('.tool-clear').addEventListener('click', () => painter.clearArt());
 
   window.addEventListener('keydown', (e) => {
     if (!overlay.classList.contains('open')) return;
@@ -471,37 +254,8 @@ export function createCreator({ onLaunch, onPreview }) {
     }
   });
 
-  // ---------- live mini preview beside the canvas ----------
-  let mini = null;
-  function ensureMini() {
-    if (mini) return mini;
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setSize(150, 150);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    $('.mini-holder').appendChild(renderer.domElement);
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 20);
-    camera.position.set(0, 0.3, 3.4);
-    camera.lookAt(0, 0, 0);
-    const sun = new THREE.DirectionalLight(0xffe9c9, 2.2);
-    sun.position.set(4, 2, 3);
-    scene.add(sun);
-    scene.add(new THREE.AmbientLight(0x445070, 1.6));
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    const globe = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 32, 22),
-      new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85 })
-    );
-    scene.add(globe);
-    mini = { renderer, scene, camera, globe, texture };
-    return mini;
-  }
-
-  // one RAF loop drives: composite -> display canvas, throttled texture
-  // upload, and the mini globe rotation. Runs only while the overlay is open.
+  // one RAF loop composites the art onto the visible canvas and, only while the
+  // preview step is showing, throttles texture uploads. Runs while open.
   let rafOn = false;
   let lastTexAt = 0;
   let texDirty = false;
@@ -515,17 +269,10 @@ export function createCreator({ onLaunch, onPreview }) {
       texDirty = true;
     }
     const now = performance.now();
-    if (mini) {
-      if (texDirty && now - lastTexAt > 130) {
-        mini.texture.needsUpdate = true;
-        if (preview) preview.texture.needsUpdate = true;
-        texDirty = false;
-        lastTexAt = now;
-      }
-      if (!$('.step-draw').classList.contains('hidden')) {
-        mini.globe.rotation.y += 0.006;
-        mini.renderer.render(mini.scene, mini.camera);
-      }
+    if (texDirty && now - lastTexAt > 130) {
+      if (preview) preview.texture.needsUpdate = true;
+      texDirty = false;
+      lastTexAt = now;
     }
     requestAnimationFrame(loop);
   }
@@ -535,6 +282,17 @@ export function createCreator({ onLaunch, onPreview }) {
     type: 'soft',
     atmo: { mode: 'soft', color: ATMO_PALETTE[0] },
     vibe: null,
+  };
+
+  const bindChips = (cls, onPick, allowOff = false) => {
+    $$('.' + cls).forEach((b) => {
+      b.addEventListener('click', () => {
+        const turnOff = allowOff && b.dataset.on === '1';
+        $$('.' + cls).forEach((x) => (x.dataset.on = ''));
+        if (!turnOff) b.dataset.on = '1';
+        onPick(turnOff ? null : b.dataset.value);
+      });
+    });
   };
 
   bindChips('c-type', (v) => { config.type = v; });
@@ -608,6 +366,11 @@ export function createCreator({ onLaunch, onPreview }) {
     p.texture.needsUpdate = true;
     const material = makeSurfaceMaterial(p.texture, derived.type, derived.emissive);
     previewPlanet = buildPlanetVisual(material, derived.look);
+    // the preview lights the camera-facing side so the artwork stays clearly
+    // readable while still reading as a lit 3D sphere; in the universe this is
+    // driven per-frame from each planet's real star instead.
+    const psl = previewPlanet.surface.material.userData.starLight;
+    if (psl) { psl.uToStar.value.set(0.25, 0.18, 1).normalize(); psl.uAmbient.value = 0.34; psl.uDayStrength.value = 0.9; }
     previewPlanet.group.rotation.z = derived.tilt * 0.5;
     p.scene.add(previewPlanet.group);
     p.camera.position.set(0, 0.5, derived.look.rings ? 5.6 : 3.7);
@@ -653,7 +416,6 @@ export function createCreator({ onLaunch, onPreview }) {
   function open() {
     overlay.classList.add('open');
     showStep('draw');
-    ensureMini();
     painter.markDirty();
     if (!rafOn) { rafOn = true; loop(); }
   }
@@ -708,7 +470,6 @@ export function createCreator({ onLaunch, onPreview }) {
     painter.redoStack.length = 0;
     painter.markDirty();
     nameInput.value = '';
-    textInput.value = '';
     statusEl.textContent = '';
   });
 
