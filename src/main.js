@@ -240,6 +240,7 @@ const creator = createCreator({
     if (remoteId) myPlanet.remoteId = remoteId;
     saveMyPlanet(myPlanet, canvas, derived);
     findBtn.classList.remove('gone');
+    refreshCreationGate(); // this browser has planted its one world
     audio.birth(); // something has just come into existence
 
     // let it sail away, then whisper where it went
@@ -256,8 +257,26 @@ const creator = createCreator({
   },
 });
 
-document.getElementById('create-btn').addEventListener('click', () => {
-  if (travel.active) return;
+// ---- one planet per browser (soft, localStorage-only) ----
+// A gentle "you've already planted one" once this browser has a planet. No
+// server enforcement, no IP, no device id — clearing storage or a new browser
+// lets you plant again. It just keeps a single visitor from filling the sky.
+const createBtn = document.getElementById('create-btn');
+function hasOwnPlanet() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    return !!(saved && saved.v === 1);
+  } catch { return false; }
+}
+function refreshCreationGate() {
+  const planted = hasOwnPlanet();
+  createBtn.classList.toggle('planted', planted);
+  createBtn.textContent = planted ? "you've already planted one" : 'make a planet';
+}
+refreshCreationGate();
+
+createBtn.addEventListener('click', () => {
+  if (travel.active || hasOwnPlanet()) return;
   focus.clear();
   creator.open();
 });

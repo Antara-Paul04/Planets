@@ -669,3 +669,13 @@ body.ambient #info-btn { opacity: 0.25; transition: opacity 3s ease; } /* stays 
 @media (max-width: 560px) {
   .info-cols { grid-template-columns: 1fr; }
 }
+
+/* ---- one-planet-per-browser: the quiet "already planted" state ---- */
+#create-btn.planted {
+  border-color: var(--line);
+  color: var(--ink-faint);
+  font-style: italic;
+  cursor: default;
+  pointer-events: none; /* a quiet label, not a button */
+  box-shadow: none;
+}
