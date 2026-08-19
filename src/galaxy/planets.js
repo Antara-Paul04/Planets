@@ -32,6 +32,8 @@ export const GEO_HI = new THREE.SphereGeometry(1, 28, 20);
 export const GEO_MID = new THREE.SphereGeometry(1, 14, 10);
 export const GEO_LOW = new THREE.SphereGeometry(1, 8, 6);
 
+const _toStar = new THREE.Vector3(); // scratch for per-frame star-direction updates
+
 const TYPE_PARAMS = {
   soft:     { roughness: 0.9,  metalness: 0.0,  envMapIntensity: 0.15 },
   rocky:    { roughness: 1.0,  metalness: 0.0,  envMapIntensity: 0.1 },
@@ -42,13 +44,48 @@ const TYPE_PARAMS = {
 
 export function makeSurfaceMaterial(texture, type, emissive = 0x000000) {
   const p = TYPE_PARAMS[type] || TYPE_PARAMS.soft;
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     map: texture,
     roughness: p.roughness,
     metalness: p.metalness,
     envMapIntensity: p.envMapIntensity,
     emissive: new THREE.Color(emissive),
   });
+  return applyStarLighting(mat);
+}
+
+// Light the surface from the planet's OWN star instead of the global scene
+// lights. A single diffuse term -- max(dot(worldNormal, dirToStar)) -- plus a
+// low ambient floor gives a genuine day/night terminator that tracks the star
+// as the planet orbits and spins. The artwork (diffuseColor) is never altered;
+// only its brightness varies. uToStar is world-space, set per planet each frame
+// by PlanetField.update. Every planet gets its own uniforms but the shader
+// source is identical, so THREE shares one compiled program across them.
+function applyStarLighting(mat) {
+  const starLight = {
+    uToStar: { value: new THREE.Vector3(0.5, 0.35, 0.79) }, // placeholder until first update
+    uAmbient: { value: 0.12 }, // low fill: night side keeps its shape, never glows or self-lits
+    uDayStrength: { value: 0.90 }, // day peak (ambient+day) ~= 1.0 -> true artwork brightness, no wash
+  };
+  mat.userData.starLight = starLight;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uToStar = starLight.uToStar;
+    shader.uniforms.uAmbient = starLight.uAmbient;
+    shader.uniforms.uDayStrength = starLight.uDayStrength;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vStarNrm;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n  vStarNrm = mat3(modelMatrix) * objectNormal;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vStarNrm;\nuniform vec3 uToStar;\nuniform float uAmbient;\nuniform float uDayStrength;')
+      // NOTE: must run BEFORE <opaque_fragment>, which does
+      // `gl_FragColor = vec4(outgoingLight, diffuseColor.a)`. Splicing at
+      // <tonemapping_fragment> (which runs after) would be a dead store.
+      .replace('#include <opaque_fragment>',
+        '  float _ndl = max(dot(normalize(vStarNrm), normalize(uToStar)), 0.0);\n' +
+        '  outgoingLight = diffuseColor.rgb * (uAmbient + uDayStrength * _ndl) + totalEmissiveRadiance;\n' +
+        '#include <opaque_fragment>');
+  };
+  return mat;
 }
 
 // ---- shared caches (rings / moons / atmospheres) ----
@@ -366,9 +403,10 @@ export class PlanetField {
       tex.wrapS = THREE.RepeatWrapping;
       tex.anisotropy = 4;
       const type = TYPE_KEYS[Math.floor(rand() * TYPE_KEYS.length)];
-      const material = makeSurfaceMaterial(tex, type);
       const farMaterial = new THREE.MeshLambertMaterial({ color: averageColor(canvas) });
-      this._pool.push({ material, farMaterial });
+      // texture + type only: each planet builds its own star-lit material so it
+      // can carry its own per-star light direction
+      this._pool.push({ texture: tex, type, farMaterial });
     }
   }
 
@@ -429,7 +467,8 @@ export class PlanetField {
       tilt: (rand() - 0.5) * 1.1,
     };
     const pooled = this._pool[Math.floor(rand() * this._pool.length)];
-    return this._build(spec, pooled.material, pooled.farMaterial);
+    const material = makeSurfaceMaterial(pooled.texture, pooled.type);
+    return this._build(spec, material, pooled.farMaterial);
   }
 
   addUserPlanet({ name, canvas, derived, position, orbit = null, solarSystemId = null, travelFrom, createdAt }) {
@@ -521,6 +560,13 @@ export class PlanetField {
       p._aurora.mat.dispose();
     }
     if (p._ringMat) p._ringMat.dispose();
+    // each planet now owns its surface material (hi + mid share this one
+    // instance); dispose it. The map is unique only for user planets — pooled
+    // random-planet textures are shared, so leave those alone.
+    if (p.surface && p.surface.material) {
+      if (p.isUser && p.surface.material.map) p.surface.material.map.dispose();
+      p.surface.material.dispose();
+    }
     const i = this.planets.indexOf(p);
     if (i >= 0) this.planets.splice(i, 1);
   }
@@ -584,6 +630,16 @@ export class PlanetField {
         const t = Math.min(1, p.spawn.t);
         p.object.scale.setScalar(Math.max(0.001, p.scale * easeOutBack(t)));
         if (t >= 1) delete p.spawn;
+      }
+      // light this planet from its own star: world-space direction from the
+      // planet to its star's center. Cheap (one subtract + normalize); the
+      // shader does the actual day/night shading on the GPU.
+      const sl = p.surface.material.userData.starLight;
+      if (sl) {
+        if (p.orbit) _toStar.copy(p.orbit.center).sub(p.object.position);
+        else _toStar.copy(p.object.position).multiplyScalar(-1); // no star: face universe center
+        const L = _toStar.length();
+        if (L > 1e-6) sl.uToStar.value.copy(_toStar).multiplyScalar(1 / L);
       }
     }
     for (const a of this._auroras) {
