@@ -288,12 +288,8 @@ document.getElementById('info-btn').addEventListener('click', () => {
   else info.open();
 });
 
-// ---- ambient mode: the universe takes over when you stop ----
+// ---- idle mode: the UI recedes when you stop (the camera stays put) ----
 const ambient = new AmbientDirector({
-  camera,
-  controls,
-  field,
-  stars: env.stars,
   isBusy: () => creator.isOpen() || travel.active || (intro && intro.active) || info.isOpen(),
   onEnter: () => {
     focus.clear();
