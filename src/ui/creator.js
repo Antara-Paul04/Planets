@@ -371,6 +371,8 @@ export function createCreator({ onLaunch, onPreview }) {
     // driven per-frame from each planet's real star instead.
     const psl = previewPlanet.surface.material.userData.starLight;
     if (psl) { psl.uToStar.value.set(0.25, 0.18, 1).normalize(); psl.uAmbient.value = 0.34; psl.uDayStrength.value = 0.9; }
+    // point the atmosphere glow the same way, so the preview shows a lit crescent, not a ring
+    if (previewPlanet.atmoMesh) previewPlanet.atmoMesh.material.uniforms.uToStar.value.set(0.25, 0.18, 1).normalize();
     previewPlanet.group.rotation.z = derived.tilt * 0.5;
     p.scene.add(previewPlanet.group);
     p.camera.position.set(0, 0.5, derived.look.rings ? 5.6 : 3.7);

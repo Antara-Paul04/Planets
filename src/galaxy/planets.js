@@ -153,13 +153,6 @@ function makeRingMaterial(color, opacity, inner, outer, seed) {
   });
 }
 
-const atmoMatCache = new Map();
-function atmoMat(color, intensity) {
-  const key = `${new THREE.Color(color).getHexString()}:${intensity.toFixed(2)}`;
-  if (!atmoMatCache.has(key)) atmoMatCache.set(key, createAtmosphereMaterial(color, intensity));
-  return atmoMatCache.get(key);
-}
-
 const MOON_MATS = [0xd8d2c4, 0xbfae9a, 0x9aa4b5].map(
   (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })
 );
@@ -183,7 +176,7 @@ export function buildPlanetVisual(material, look) {
 
   let atmoMesh = null;
   if (look.atmo) {
-    atmoMesh = new THREE.Mesh(GEO_HI, atmoMat(look.atmo.color, look.atmo.intensity));
+    atmoMesh = new THREE.Mesh(GEO_HI, createAtmosphereMaterial(look.atmo.color, look.atmo.intensity));
     atmoMesh.scale.setScalar(look.atmo.shell);
     atmoMesh.raycast = noRaycast;
     freeze(atmoMesh);
@@ -507,6 +500,7 @@ export class PlanetField {
     const hi = buildPlanetVisual(material, spec.look);
     hi.surface.userData.planet = spec;
     spec._ringMat = hi.ringMaterial;
+    spec._atmoMat = hi.atmoMesh ? hi.atmoMesh.material : null; // per-frame star direction target
     const mid = buildMidVisual(material, spec.look, hi.ringMaterial);
     mid.surface.userData.planet = spec;
     const far = new THREE.Mesh(GEO_LOW, farMaterial);
@@ -537,6 +531,7 @@ export class PlanetField {
     if (spec.aurora && spec.look.atmo && hi.atmoMesh) {
       const own = createAtmosphereMaterial(spec.look.atmo.color, spec.look.atmo.intensity);
       hi.atmoMesh.material = own;
+      spec._atmoMat = own;
       spec._aurora = {
         mat: own,
         base: spec.look.atmo.intensity,
@@ -557,8 +552,8 @@ export class PlanetField {
     if (p._aurora) {
       const ai = this._auroras.indexOf(p._aurora);
       if (ai >= 0) this._auroras.splice(ai, 1);
-      p._aurora.mat.dispose();
     }
+    if (p._atmoMat) p._atmoMat.dispose(); // per-planet atmosphere (also the aurora material)
     if (p._ringMat) p._ringMat.dispose();
     // each planet now owns its surface material (hi + mid share this one
     // instance); dispose it. The map is unique only for user planets — pooled
@@ -634,12 +629,14 @@ export class PlanetField {
       // light this planet from its own star: world-space direction from the
       // planet to its star's center. Cheap (one subtract + normalize); the
       // shader does the actual day/night shading on the GPU.
-      const sl = p.surface.material.userData.starLight;
-      if (sl) {
-        if (p.orbit) _toStar.copy(p.orbit.center).sub(p.object.position);
-        else _toStar.copy(p.object.position).multiplyScalar(-1); // no star: face universe center
-        const L = _toStar.length();
-        if (L > 1e-6) sl.uToStar.value.copy(_toStar).multiplyScalar(1 / L);
+      if (p.orbit) _toStar.copy(p.orbit.center).sub(p.object.position);
+      else _toStar.copy(p.object.position).multiplyScalar(-1); // no star: face universe center
+      const L = _toStar.length();
+      if (L > 1e-6) {
+        _toStar.multiplyScalar(1 / L);
+        const sl = p.surface.material.userData.starLight;
+        if (sl) sl.uToStar.value.copy(_toStar);
+        if (p._atmoMat) p._atmoMat.uniforms.uToStar.value.copy(_toStar); // glow scatters on the day limb
       }
     }
     for (const a of this._auroras) {
