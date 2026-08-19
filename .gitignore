@@ -1,5 +1,5 @@
 node_modules
 dist
 .vercel
-.vercel
-\n.env\n.env.local\n
+.env
+.env.local
