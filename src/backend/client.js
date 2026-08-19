@@ -103,16 +103,19 @@ export async function reportPlanetRemote(planetId) {
   }
 }
 
-// artwork comes back from public storage as a URL; the renderer needs a canvas
+// Artwork comes back from public storage as a URL; the renderer needs a canvas.
+// Draw it at its native 512x256 — the stored image is 512x256, so the old
+// 1024x512 canvas was a pure upscale that quadrupled GPU texture memory without
+// adding any detail (the GPU's bilinear sampling reproduces it for free).
 export function loadArtworkCanvas(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      canvas.width = 1024;
-      canvas.height = 512;
-      canvas.getContext('2d').drawImage(img, 0, 0, 1024, 512);
+      canvas.width = 512;
+      canvas.height = 256;
+      canvas.getContext('2d').drawImage(img, 0, 0, 512, 256);
       resolve(canvas);
     };
     img.onerror = reject;
