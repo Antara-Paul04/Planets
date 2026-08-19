@@ -20,8 +20,11 @@ function flatten(canvas, w = 512, h = 256) {
   return c.toDataURL('image/png');
 }
 
-// world state only: the planet's permanent parameters, never frame state
-export async function createPlanetRemote({ clientRef, name, canvas, star, position, orbit, derived }) {
+// world state only: the planet's permanent parameters, never frame state.
+// The client proposes candidate stars (nearest-first) + the planet's visual
+// extent; the SERVER decides the final star and orbit (capacity is enforced
+// server-side, never here).
+export async function createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived }) {
   let image;
   try {
     image = flatten(canvas);
@@ -33,17 +36,8 @@ export async function createPlanetRemote({ clientRef, name, canvas, star, positi
     clientRef,
     name,
     image,
-    star: star ? {
-      id: star.id,
-      type: star.type,
-      seed: star.seed,
-      x: star.position.x, y: star.position.y, z: star.position.z,
-    } : null,
-    position: { x: position.x, y: position.y, z: position.z },
-    orbit: orbit ? {
-      radius: orbit.radius, angle: orbit.angle, speed: orbit.speed,
-      incl: orbit.incl || 0, node: orbit.node || 0,
-    } : null,
+    candidates,
+    extent,
     satelliteType: look.rings ? 'rings' : (look.moons && look.moons.length ? 'moons' : 'none'),
     satelliteConfig: { atmo: look.atmo || null, rings: look.rings || null, moons: look.moons || [] },
     surfaceType: derived.type,
@@ -72,14 +66,15 @@ export async function createPlanetRemote({ clientRef, name, canvas, star, positi
 export async function fetchSharedPlanets() {
   try {
     const res = await fetch('/api/planets');
-    if (!res.ok) return { planets: [], unavailable: IS_PROD };
+    if (!res.ok) return { planets: [], stars: [], unavailable: IS_PROD };
     const json = await res.json();
     return {
       planets: Array.isArray(json.planets) ? json.planets : [],
+      stars: Array.isArray(json.stars) ? json.stars : [], // dynamically-minted stars
       unavailable: !!json.unavailable || (IS_PROD && !!json.fallback),
     };
   } catch {
-    return { planets: [], unavailable: IS_PROD };
+    return { planets: [], stars: [], unavailable: IS_PROD };
   }
 }
 

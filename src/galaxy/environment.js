@@ -334,17 +334,56 @@ export class Environment {
     this.sky.add(tw.points);
   }
 
-  _buildStars(rand) {
-    const hexA = (hex, a) => {
+  // the star's far-distance glow sprite (pure; no PRNG)
+  _starGlow(a, b) {
+    const hexA = (hex, alpha) => {
       const c = new THREE.Color(hex);
-      return `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${a})`;
+      return `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${alpha})`;
     };
-    const glowSprite = (a, b) => makeGlowSprite([
+    return makeGlowSprite([
       [0, 'rgba(255,255,255,0.9)'],
       [0.16, hexA(a, 0.5)],
       [0.5, hexA(b, 0.12)],
       [1, 'rgba(0,0,0,0)'],
     ]);
+  }
+
+  _addStarToScene(star) {
+    this.scene.add(star.object);
+    this.scene.add(star.glow);
+    this.scene.add(star.orbitGroup);
+    this.scene.add(star.proxy);
+    this.stars.push(star);
+    return star;
+  }
+
+  // look up any star by id (deterministic index or dynamic id)
+  getStar(id) {
+    return this.stars.find((s) => s.id === id) || null;
+  }
+
+  // a star minted server-side because every existing star was full; rendered
+  // from its persisted data, added to the live universe. Positions are stable
+  // (derived deterministically in the DB from the star id).
+  addDynamicStar(d) {
+    const existing = this.getStar(d.id);
+    if (existing) return existing;
+    const type = STAR_TYPES[d.type] ? d.type : 'yellow';
+    const [rMin, rMax] = STAR_TYPES[type].radius;
+    const star = buildStar({
+      id: d.id,
+      position: new THREE.Vector3(d.x, d.y, d.z),
+      type,
+      radius: Number.isFinite(d.radius) ? d.radius : (rMin + rMax) / 2,
+      seed: Number.isFinite(d.seed) ? d.seed : 0,
+      plane: { incl: d.plane_incl || 0, node: d.plane_node || 0 },
+      glowSprite: (a, b) => this._starGlow(a, b),
+    });
+    return this._addStarToScene(star);
+  }
+
+  _buildStars(rand) {
+    const glowSprite = (a, b) => this._starGlow(a, b);
 
     const n = 8 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) {
@@ -377,11 +416,7 @@ export class Environment {
         plane: { incl: (rand() - 0.5) * 0.7, node: rand() * Math.PI * 2 },
         glowSprite,
       });
-      this.scene.add(star.object);
-      this.scene.add(star.glow);
-      this.scene.add(star.orbitGroup);
-      this.scene.add(star.proxy);
-      this.stars.push(star);
+      this._addStarToScene(star);
     }
 
     this._buildBeacons();

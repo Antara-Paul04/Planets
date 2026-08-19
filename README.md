@@ -56,6 +56,22 @@ explore → make a planet → draw → make it yours → name → preview → la
   orbiting planets), minimal name label
 - `src/perf.js` — fps/draw-call readout + 50–1000 planet stress buttons (press `p`)
 
+## Star capacity (v15)
+
+Every star supports a maximum number of USER planets, derived deterministically
+from its type (no storage, no randomness): blue 4, white 6, orange 9, yellow 12,
+red 15 — ordered by the type's characteristic size. Assignment is
+server-authoritative and atomic: the browser proposes candidate stars
+(nearest-first); the `assign_planet` Postgres RPC picks the first with a free
+slot — locking per-star so simultaneous creators can't overflow a system —
+computes a fresh non-colliding orbital band, and inserts the planet. Capacity
+counts ALL rows for a star (hidden included: hiding never frees a slot). If
+every candidate is full, a new star is minted deterministically (id >=
+1,000,000, position/type derived from an id hash) far out and persisted;
+existing deterministic stars (ids 0..N) and their positions/planets never
+change. Capacity is invisible — no meters, no "4/6" UI. Only user planets
+exist; nothing is auto-populated. Migration `002_star_capacity.sql`.
+
 ## Backend: Supabase persistence + reporting (v13-v14)
 
 User-created planets persist in Supabase (free plan): a `planets` table

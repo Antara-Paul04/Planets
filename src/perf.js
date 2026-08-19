@@ -1,18 +1,12 @@
-// Dev-only FPS / draw-call readout with stress-test buttons.
-// Press "p" to hide it.
+// Dev-only FPS / draw-call readout. Press "p" to hide it.
+// (Planet stress-test buttons were removed: planets are user-generated only,
+// so nothing may inject non-user planets into the universe.)
 
-export function createPerfPanel({ renderer, field, onSetCount }) {
+export function createPerfPanel({ renderer, field }) {
   const el = document.createElement('div');
   el.id = 'perf';
-  el.innerHTML =
-    '<span class="perf-stats">measuring…</span>' +
-    '<span class="perf-buttons">' +
-    [50, 100, 250, 500, 1000].map((n) => `<button data-n="${n}">${n}</button>`).join(' ') +
-    '</span>';
+  el.innerHTML = '<span class="perf-stats">measuring…</span>';
   document.body.appendChild(el);
-  el.querySelectorAll('button').forEach((b) =>
-    b.addEventListener('click', () => onSetCount(Number(b.dataset.n)))
-  );
   const stats = el.querySelector('.perf-stats');
 
   window.addEventListener('keydown', (e) => {

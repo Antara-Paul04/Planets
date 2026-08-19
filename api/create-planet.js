@@ -5,19 +5,39 @@ import { decodeArtwork } from '../lib/validate-image.js';
 // body: {
 //   clientRef: uuid,          -- idempotency: retries return the same planet
 //   name, image (png dataURL),
-//   star: { id, type, seed, x, y, z },
-//   position: {x,y,z}, orbit: {radius, angle, speed, incl, node} | null,
-//   satelliteType: 'none'|'moons'|'rings', satelliteConfig, surfaceType,
-//   vibe, scale, rotationSpeed, tilt
+//   candidates: [{ id, type, seed, x, y, z, radius, plane_incl, plane_node }, ...] nearest-first,
+//   extent: number,          -- the planet's visual reach, for orbit spacing
+//   satelliteType, satelliteConfig, surfaceType, vibe, scale, rotationSpeed, tilt
 // }
 //
-// Flow: validate -> upsert star -> insert planet row -> upload artwork ->
-// set artwork_path. If the upload fails the row is deleted, so no broken
-// planet is left behind. Without Supabase configured, responds
-// {fallback:true} and the client keeps its local-only behavior.
+// The SERVER decides the star + orbit atomically via assign_planet() —
+// capacity is enforced in the database, never trusted from the browser. The
+// browser only proposes candidate stars (nearest-first). Flow:
+//   validate -> assign_planet RPC (row inserted with artwork_path) ->
+//   upload artwork (keyed by clientRef) -> return the assignment.
+// On upload failure the row is removed, so no broken planet is left behind.
+// Without Supabase configured, responds {fallback:true} (dev) or 503 (prod).
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const num = (v) => (Number.isFinite(v) ? v : null);
+
+function sanitizeCandidates(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const c of list.slice(0, 64)) {
+    if (!c || !Number.isInteger(c.id)) continue;
+    out.push({
+      id: c.id,
+      type: typeof c.type === 'string' ? c.type.slice(0, 16) : 'yellow',
+      seed: num(c.seed) ?? 0,
+      x: num(c.x) ?? 0, y: num(c.y) ?? 0, z: num(c.z) ?? 0,
+      radius: num(c.radius) ?? 16,
+      plane_incl: num(c.plane_incl) ?? 0,
+      plane_node: num(c.plane_node) ?? 0,
+    });
+  }
+  return out;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -28,7 +48,6 @@ export default async function handler(req, res) {
   const db = getSupabase();
   if (!db) {
     if (isProductionStrict()) {
-      // production has one source of truth -- creation cannot succeed
       res.status(503).json({ error: 'universe_unavailable' });
       return;
     }
@@ -38,101 +57,73 @@ export default async function handler(req, res) {
 
   const b = req.body || {};
   const name = typeof b.name === 'string' ? b.name.trim().slice(0, 64) : '';
-  if (!name) {
-    res.status(400).json({ error: 'invalid_name' });
-    return;
-  }
+  if (!name) { res.status(400).json({ error: 'invalid_name' }); return; }
   if (typeof b.clientRef !== 'string' || !UUID_RE.test(b.clientRef)) {
-    res.status(400).json({ error: 'invalid_client_ref' });
-    return;
+    res.status(400).json({ error: 'invalid_client_ref' }); return;
   }
   const art = decodeArtwork(b.image);
-  if (!art.ok) {
-    res.status(400).json({ error: 'invalid_artwork' });
-    return;
-  }
-  const satelliteType = ['none', 'moons', 'rings'].includes(b.satelliteType) ? b.satelliteType : 'none';
-  const pos = b.position || {};
-  const orbit = b.orbit || null;
+  if (!art.ok) { res.status(400).json({ error: 'invalid_artwork' }); return; }
+  const candidates = sanitizeCandidates(b.candidates);
+  if (!candidates.length) { res.status(400).json({ error: 'no_candidate_stars' }); return; }
+
+  const extent = Math.min(200, Math.max(1, num(b.extent) ?? 3));
+  const artworkPath = `planets/${b.clientRef}.png`;
+  const planet = {
+    name,
+    artwork_path: artworkPath,
+    satellite_type: ['none', 'moons', 'rings'].includes(b.satelliteType) ? b.satelliteType : 'none',
+    satellite_config: b.satelliteConfig && typeof b.satelliteConfig === 'object' ? b.satelliteConfig : null,
+    surface_type: typeof b.surfaceType === 'string' ? b.surfaceType.slice(0, 16) : null,
+    vibe: typeof b.vibe === 'string' ? b.vibe.slice(0, 16) : null,
+    scale: num(b.scale) ?? 2.4,
+    rotation_speed: num(b.rotationSpeed) ?? 0.12,
+    tilt: num(b.tilt) ?? 0.25,
+  };
 
   try {
-    // deterministic star sync -- first write wins, later writes can't tamper
-    if (b.star && Number.isInteger(b.star.id)) {
-      await db.upsertStar({
-        id: b.star.id,
-        star_type: String(b.star.type || 'yellow').slice(0, 16),
-        seed: num(b.star.seed) ?? 0,
-        position_x: num(b.star.x) ?? 0,
-        position_y: num(b.star.y) ?? 0,
-        position_z: num(b.star.z) ?? 0,
-      });
+    const rpc = await db.rpcAssignPlanet({ clientRef: b.clientRef, candidates, extent, planet });
+    if (!rpc.ok || !Array.isArray(rpc.json) || !rpc.json[0]) {
+      if (isProductionStrict()) { res.status(503).json({ error: 'universe_unavailable' }); return; }
+      res.status(500).json({ error: 'create_failed' });
+      return;
     }
+    const a = rpc.json[0];
 
-    const row = {
-      client_ref: b.clientRef,
-      name,
-      status: 'visible',
-      star_id: b.star && Number.isInteger(b.star.id) ? b.star.id : null,
-      position_x: num(pos.x), position_y: num(pos.y), position_z: num(pos.z),
-      orbit_radius: orbit ? num(orbit.radius) : null,
-      orbit_angle: orbit ? num(orbit.angle) : null,
-      orbit_speed: orbit ? num(orbit.speed) : null,
-      orbit_inclination: orbit ? num(orbit.incl) : null,
-      orbit_node: orbit ? num(orbit.node) : null,
-      satellite_type: satelliteType,
-      satellite_config: b.satelliteConfig && typeof b.satelliteConfig === 'object' ? b.satelliteConfig : null,
-      surface_type: typeof b.surfaceType === 'string' ? b.surfaceType.slice(0, 16) : null,
-      vibe: typeof b.vibe === 'string' ? b.vibe.slice(0, 16) : null,
-      scale: num(b.scale), rotation_speed: num(b.rotationSpeed), tilt: num(b.tilt),
-    };
-
-    let planet = null;
-    const ins = await db.insertPlanet(row);
-    if (ins.ok && Array.isArray(ins.json) && ins.json[0]) {
-      planet = ins.json[0];
-    } else if (ins.status === 409) {
-      // idempotent retry: this clientRef already created a planet
-      const existing = await db.findPlanetByClientRef(b.clientRef);
-      if (existing.ok && existing.json && existing.json[0]) {
-        const p = existing.json[0];
-        res.status(200).json({
-          ok: true,
-          planet: publicShape(db, p),
-          deduplicated: true,
-        });
+    // upload artwork unless this was an idempotent retry (already uploaded)
+    if (!a.deduplicated) {
+      const up = await db.uploadArtwork(artworkPath, art.buffer);
+      if (!up.ok) {
+        await db.deletePlanetByClientRef(b.clientRef); // no broken planet left behind
+        res.status(500).json({ error: 'artwork_upload_failed' });
         return;
       }
-      res.status(500).json({ error: 'create_failed' });
-      return;
-    } else {
-      res.status(500).json({ error: 'create_failed' });
-      return;
     }
-
-    const artworkPath = `planets/${planet.id}.png`;
-    const up = await db.uploadArtwork(artworkPath, art.buffer);
-    if (!up.ok) {
-      await db.deletePlanet(planet.id); // no broken half-planets
-      res.status(500).json({ error: 'artwork_upload_failed' });
-      return;
-    }
-    await db.setArtworkPath(planet.id, artworkPath);
-    planet.artwork_path = artworkPath;
 
     console.log(JSON.stringify({
-      at: 'create-planet', ts: new Date().toISOString(), id: planet.id, starId: row.star_id,
+      at: 'create-planet', ts: new Date().toISOString(),
+      id: a.planet_id, starId: a.star_id, newStar: a.star_is_new, dedup: a.deduplicated,
     }));
-    res.status(200).json({ ok: true, planet: publicShape(db, planet) });
+    res.status(200).json({ ok: true, planet: shape(db, a, artworkPath) });
   } catch {
+    if (isProductionStrict()) { res.status(503).json({ error: 'universe_unavailable' }); return; }
     res.status(500).json({ error: 'create_failed' });
   }
 }
 
-function publicShape(db, p) {
+function shape(db, a, artworkPath) {
   return {
-    id: p.id,
-    name: p.name,
-    createdAt: p.created_at,
-    artworkUrl: p.artwork_path ? db.publicArtworkUrl(p.artwork_path) : null,
+    id: a.planet_id,
+    name: undefined, // name echoes back via the toast on the client
+    createdAt: a.created_at,
+    artworkUrl: db.publicArtworkUrl(artworkPath),
+    star: {
+      id: a.star_id, type: a.star_type, seed: a.star_seed, radius: a.star_radius,
+      x: a.star_x, y: a.star_y, z: a.star_z,
+      plane_incl: a.star_plane_incl, plane_node: a.star_plane_node,
+      isNew: a.star_is_new,
+    },
+    orbit: {
+      radius: a.o_radius, angle: a.o_angle, speed: a.o_speed, incl: a.o_incl, node: a.o_node,
+    },
   };
 }

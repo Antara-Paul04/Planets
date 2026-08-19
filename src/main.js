@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { createScene } from './galaxy/scene.js';
 import { Environment } from './galaxy/environment.js';
 import { PlanetField, orbitExtentOf, normalizeLook } from './galaxy/planets.js';
-import { mulberry32 } from './galaxy/textures.js';
 import { FocusController } from './focus.js';
 import { createPerfPanel } from './perf.js';
 import { createCreator } from './ui/creator.js';
@@ -18,8 +17,9 @@ const { renderer, scene, camera, controls, sun } = createScene(document.getEleme
 
 const env = new Environment(scene, camera);
 const field = new PlanetField(scene, env.suns);
-const rand = mulberry32(42);
-field.setRandomCount(64, rand);
+// Stars are procedural; planets are user-generated. The universe starts with
+// its deterministic stars and ZERO planets — only worlds persisted in
+// Supabase (loaded below) ever appear as planets.
 
 const focus = new FocusController(camera, controls, document.getElementById('planet-label'));
 
@@ -100,8 +100,9 @@ function restoreMyPlanet() {
     canvas.getContext('2d').drawImage(img, 0, 0, 1024, 512);
     let orbit = null;
     let position = new THREE.Vector3().fromArray(saved.position);
-    if (saved.orbit && env.stars[saved.orbit.starId]) {
-      const star = env.stars[saved.orbit.starId];
+    const savedStar = saved.orbit ? env.getStar(saved.orbit.starId) : null;
+    if (savedStar) {
+      const star = savedStar;
       const radius = claimOrbitRadius(star, saved.orbit.radius, orbitExtentOf(saved.derived.scale, saved.derived.look));
       orbit = { ...saved.orbit, radius, center: star.position.clone() };
       // if the radius was nudged, keep the speed law consistent with it
@@ -148,7 +149,7 @@ findBtn.addEventListener('click', () => {
     return;
   }
   focus.clear();
-  const destStar = env.stars[myPlanet.solarSystemId] ?? [...env.stars].sort(
+  const destStar = env.getStar(myPlanet.solarSystemId) ?? [...env.stars].sort(
     (a, b) => a.position.distanceTo(myPlanet.position) - b.position.distanceTo(myPlanet.position)
   )[0];
   if (!travel.begin(myPlanet, destStar)) focus.focus(myPlanet);
@@ -167,25 +168,20 @@ const creator = createCreator({
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const start = camera.position.clone().addScaledVector(dir, 14);
+    const extent = orbitExtentOf(derived.scale, derived.look);
 
-    // every planet gets a home: the nearest sun's system. Made inside a
-    // system, it stays there; made in the void, it sails to the closest one.
-    const home = [...env.stars].sort(
-      (a, b) => a.position.distanceTo(camera.position) - b.position.distanceTo(camera.position)
-    )[0];
-    const wasNear = home && camera.position.distanceTo(home.position) < home.influence;
-    const orbit = assignOrbit(home, Math.random, derived.extraGap || 0, orbitExtentOf(derived.scale, derived.look));
-    // user planets stay near the system plane — no surprise oddball tilt
-    orbit.incl = home.plane.incl + Math.max(-0.18, Math.min(0.18, orbit.incl - home.plane.incl));
-    const end = orbitPosition(orbit, new THREE.Vector3());
+    // propose candidate stars nearest-first; the SERVER decides the final home
+    // and orbit (capacity is enforced there, never trusted from the browser).
+    const candidates = [...env.stars]
+      .sort((a, b) => a.position.distanceTo(camera.position) - b.position.distanceTo(camera.position))
+      .map((s) => ({
+        id: s.id, type: s.type, seed: s.seed,
+        x: s.position.x, y: s.position.y, z: s.position.z,
+        radius: s.radius, plane_incl: s.plane.incl, plane_node: s.plane.node,
+      }));
 
-    // persist first: the planet only exists once the universe accepts it.
-    // Unconfigured backend -> the original local-only flow, unchanged.
     const clientRef = crypto.randomUUID();
-    const remote = await createPlanetRemote({
-      clientRef, name, canvas,
-      star: home, position: end, orbit, derived,
-    });
+    const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived });
     if (remote.unavailable) {
       universeStatus.classList.add('show');
       return { failed: true, unavailable: true }; // nothing spawns, drawing kept
@@ -195,15 +191,38 @@ const creator = createCreator({
     }
     universeStatus.classList.remove('show'); // the universe answered
 
+    let homeStar; let orbit; let createdAt; let remoteId = null;
+    if (remote.ok) {
+      // server-authoritative: use the star + orbit the universe assigned,
+      // materializing a freshly-minted star if every existing one was full
+      const a = remote.planet;
+      homeStar = env.getStar(a.star.id) || env.addDynamicStar(a.star);
+      orbit = {
+        starId: homeStar.id, center: homeStar.position.clone(),
+        radius: a.orbit.radius, angle: a.orbit.angle, speed: a.orbit.speed,
+        incl: a.orbit.incl, node: a.orbit.node,
+      };
+      createdAt = Date.parse(a.createdAt);
+      remoteId = a.id;
+      claimOrbitRadius(homeStar, orbit.radius, extent); // keep local bookkeeping in sync
+    } else {
+      // dev fallback (no backend configured): assign locally, as before
+      homeStar = env.getStar(candidates[0].id) || env.stars[0];
+      orbit = assignOrbit(homeStar, Math.random, derived.extraGap || 0, extent);
+      orbit.incl = homeStar.plane.incl + Math.max(-0.18, Math.min(0.18, orbit.incl - homeStar.plane.incl));
+    }
+    const end = orbitPosition(orbit, new THREE.Vector3());
+    const wasNear = homeStar && camera.position.distanceTo(homeStar.position) < homeStar.influence;
+
     myPlanet = field.addUserPlanet({
       name, canvas, derived,
       position: end,
       orbit,
-      solarSystemId: home.id,
+      solarSystemId: homeStar.id,
       travelFrom: start,
-      createdAt: remote.ok ? Date.parse(remote.planet.createdAt) : undefined,
+      createdAt,
     });
-    if (remote.ok) myPlanet.remoteId = remote.planet.id;
+    if (remoteId) myPlanet.remoteId = remoteId;
     saveMyPlanet(myPlanet, canvas, derived);
     findBtn.classList.remove('gone');
     audio.birth(); // something has just come into existence
@@ -330,14 +349,30 @@ window.addEventListener('keydown', (e) => {
 // One fetch at boot; hidden planets never arrive (excluded server-side).
 // In production, an unreachable backend shows the minimal unavailable state.
 const universeStatus = document.getElementById('universe-status');
-fetchSharedPlanets().then(async ({ planets: rows, unavailable }) => {
+fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }) => {
   if (unavailable) universeStatus.classList.add('show');
+  // materialize any dynamically-minted stars before placing planets around them
+  for (const s of (dynStars || [])) env.addDynamicStar(s);
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { /* fine */ }
   for (const row of rows) {
     if (saved && saved.remoteId && row.id === saved.remoteId) continue; // mine spawns locally
-    if (!row.artworkUrl || row.position.x == null) continue;
+    if (!row.artworkUrl) continue;
+    const star = env.getStar(row.starId);
     try {
+      const orbit = row.orbit && star ? {
+        ...row.orbit,
+        starId: row.starId,
+        center: star.position.clone(),
+      } : null;
+      // planets store no absolute position (they orbit) — derive the spawn
+      // point from the orbit; only fall back to a stored position for old rows
+      const position = orbit
+        ? orbitPosition(orbit, new THREE.Vector3())
+        : (row.position && row.position.x != null
+          ? new THREE.Vector3(row.position.x, row.position.y, row.position.z)
+          : null);
+      if (!position) continue;
       const canvas = await loadArtworkCanvas(row.artworkUrl);
       const sc = row.satelliteConfig || {};
       const spec = field.addUserPlanet({
@@ -351,28 +386,20 @@ fetchSharedPlanets().then(async ({ planets: rows, unavailable }) => {
           tilt: row.tilt || 0.25,
           emissive: 0x000000,
         },
-        position: new THREE.Vector3(row.position.x, row.position.y, row.position.z),
-        orbit: row.orbit && env.stars[row.starId] ? {
-          ...row.orbit,
-          starId: row.starId,
-          center: env.stars[row.starId].position.clone(),
-        } : null,
+        position,
+        orbit,
         solarSystemId: row.starId,
         createdAt: Date.parse(row.createdAt),
       });
       spec.remoteId = row.id;
-      if (spec.orbit && env.stars[row.starId]) {
-        claimOrbitRadius(env.stars[row.starId], spec.orbit.radius, orbitExtentOf(spec.scale, spec.look));
+      if (orbit && star) {
+        claimOrbitRadius(star, orbit.radius, orbitExtentOf(spec.scale, spec.look));
       }
     } catch { /* one bad row must not break the universe */ }
   }
 }).catch(() => { /* degraded: procedural universe still works */ });
 
-const perf = createPerfPanel({
-  renderer,
-  field,
-  onSetCount: (n) => field.setRandomCount(n, rand),
-});
+const perf = createPerfPanel({ renderer, field });
 
 // reporting: three DIFFERENT people reporting a planet removes it.
 // The server derives the reporter identity; nothing personal is collected.

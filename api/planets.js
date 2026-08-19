@@ -23,11 +23,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const out = await db.selectVisiblePlanets();
+    // one batched pair of reads: visible planets + any dynamically-minted
+    // stars. No per-star queries (no N+1), no per-frame querying.
+    const [out, starsOut] = await Promise.all([
+      db.selectVisiblePlanets(),
+      db.selectDynamicStars(),
+    ]);
     if (!out.ok || !Array.isArray(out.json)) {
-      res.status(200).json({ planets: [], degraded: true, unavailable: isProductionStrict() });
+      res.status(200).json({ planets: [], stars: [], degraded: true, unavailable: isProductionStrict() });
       return;
     }
+    const stars = (starsOut.ok && Array.isArray(starsOut.json) ? starsOut.json : []).map((s) => ({
+      id: s.id, type: s.star_type, seed: s.seed, radius: s.radius,
+      x: s.position_x, y: s.position_y, z: s.position_z,
+      plane_incl: s.plane_incl, plane_node: s.plane_node,
+    }));
     const planets = out.json.map((p) => ({
       id: p.id,
       name: p.name,
@@ -51,8 +61,8 @@ export default async function handler(req, res) {
       tilt: p.tilt,
     }));
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120');
-    res.status(200).json({ planets });
+    res.status(200).json({ planets, stars });
   } catch {
-    res.status(200).json({ planets: [], degraded: true, unavailable: isProductionStrict() });
+    res.status(200).json({ planets: [], stars: [], degraded: true, unavailable: isProductionStrict() });
   }
 }

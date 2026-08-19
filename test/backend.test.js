@@ -51,9 +51,11 @@ function baseBody() {
     clientRef: REF,
     name: 'test world',
     image: tinyPng,
-    star: { id: 1, type: 'yellow', seed: 0.5, x: 1, y: 2, z: 3 },
-    position: { x: 10, y: 0, z: 20 },
-    orbit: { radius: 50, angle: 1, speed: 0.05, incl: 0.1, node: 0.2 },
+    candidates: [
+      { id: 0, type: 'blue', seed: 1, x: 1, y: 2, z: 3, radius: 14, plane_incl: 0.1, plane_node: 0.2 },
+      { id: 1, type: 'yellow', seed: 2, x: 9, y: 0, z: 0, radius: 20, plane_incl: 0, plane_node: 1 },
+    ],
+    extent: 5,
     satelliteType: 'moons',
     satelliteConfig: { moons: [{ size: 0.2, dist: 2, speed: 0.5, phase: 0 }] },
     surfaceType: 'soft',
@@ -61,6 +63,17 @@ function baseBody() {
     rotationSpeed: 0.12,
     tilt: 0.25,
   };
+}
+
+// the row shape assign_planet() returns
+function rpcRow(over = {}) {
+  return [{
+    planet_id: 'p-1', created_at: '2026-08-19T00:00:00Z', deduplicated: false,
+    star_id: 0, star_type: 'blue', star_seed: 1, star_radius: 14,
+    star_x: 1, star_y: 2, star_z: 3, star_plane_incl: 0.1, star_plane_node: 0.2, star_is_new: false,
+    o_radius: 46, o_angle: 1, o_speed: 0.05, o_incl: 0.1, o_node: 0.2,
+    ...over,
+  }];
 }
 
 function supaEnv() {
@@ -97,54 +110,64 @@ test('create: unconfigured backend responds fallback (local-only mode)', async (
   assert.equal(res.body.fallback, true);
 });
 
-test('create: happy path inserts, uploads, sets artwork_path', async () => {
+test('create: server assigns star + orbit via RPC, uploads artwork keyed by clientRef', async () => {
   supaEnv();
   const calls = stubFetch([
-    ['rest/v1/stars', { status: 201 }],
-    ['rest/v1/planets?id=eq.', { status: 204 }],
-    ['rest/v1/planets', { status: 201, json: [{ id: 'p-1', name: 'test world', created_at: '2026-08-19T00:00:00Z' }] }],
+    ['rest/v1/rpc/assign_planet', { status: 200, json: rpcRow() }],
     ['storage/v1/object/planet-artwork/', { status: 200 }],
   ]);
   const res = mockRes();
   await createHandler({ method: 'POST', headers: {}, body: baseBody() }, res);
   assert.equal(res.body.ok, true);
   assert.equal(res.body.planet.id, 'p-1');
-  assert.ok(res.body.planet.artworkUrl.includes('planet-artwork/planets/p-1.png'));
-  const upload = calls.find((c) => c.url.includes('storage/v1/object/planet-artwork/planets/p-1.png'));
-  assert.ok(upload, 'artwork uploaded to storage, not the database');
-  assert.equal(upload.options.headers['x-upsert'], 'false');
+  assert.equal(res.body.planet.star.id, 0, 'server-chosen star echoed back');
+  assert.equal(res.body.planet.orbit.radius, 46, 'server-chosen orbit echoed back');
+  // capacity/candidates are handed to the RPC, never trusted from a "count"
+  const rpc = calls.find((c) => c.url.includes('rpc/assign_planet'));
+  const payload = JSON.parse(rpc.options.body);
+  assert.equal(payload.p_candidates.length, 2);
+  assert.equal(payload.p_extent, 5);
+  // artwork path is keyed by clientRef, not the (post-insert) planet id
+  const upload = calls.find((c) => c.url.includes(`planet-artwork/planets/${REF}.png`));
+  assert.ok(upload, 'artwork uploaded under the clientRef path');
 });
 
-test('create: artwork upload failure deletes the planet row (no broken planets)', async () => {
+test('create: artwork upload failure removes the planet (no broken planets)', async () => {
   supaEnv();
   const calls = stubFetch([
-    ['rest/v1/stars', { status: 201 }],
+    ['rest/v1/rpc/assign_planet', { status: 200, json: rpcRow() }],
     ['storage/v1/object/planet-artwork/', { status: 500 }],
-    ['rest/v1/planets?id=eq.p-2', { status: 204 }],
-    ['rest/v1/planets', { status: 201, json: [{ id: 'p-2', name: 'x', created_at: '2026-08-19T00:00:00Z' }] }],
+    [`rest/v1/planets?client_ref=eq.${REF}`, { status: 204 }],
   ]);
   const res = mockRes();
   await createHandler({ method: 'POST', headers: {}, body: baseBody() }, res);
   assert.equal(res.statusCode, 500);
-  const del = calls.find((c) => c.url.includes('planets?id=eq.p-2') && c.options.method === 'DELETE');
-  assert.ok(del, 'row cleaned up after failed upload');
+  const del = calls.find((c) => c.url.includes(`planets?client_ref=eq.${REF}`) && c.options.method === 'DELETE');
+  assert.ok(del, 'planet cleaned up after failed upload');
 });
 
-test('create: duplicate clientRef returns the existing planet (idempotent)', async () => {
+test('create: idempotent retry (RPC dedup) skips re-upload', async () => {
   supaEnv();
-  stubFetch([
-    ['rest/v1/stars', { status: 201 }],
-    ['rest/v1/planets?client_ref=eq.', { status: 200, json: [{ id: 'p-first', name: 'test world', created_at: '2026-08-19T00:00:00Z', artwork_path: 'planets/p-first.png' }] }],
-    ['rest/v1/planets', { status: 409, json: { message: 'duplicate' } }],
+  const calls = stubFetch([
+    ['rest/v1/rpc/assign_planet', { status: 200, json: rpcRow({ deduplicated: true, planet_id: 'p-first' }) }],
+    ['storage/v1/object/planet-artwork/', { status: 200 }],
   ]);
   const res = mockRes();
   await createHandler({ method: 'POST', headers: {}, body: baseBody() }, res);
   assert.equal(res.body.ok, true);
-  assert.equal(res.body.deduplicated, true);
   assert.equal(res.body.planet.id, 'p-first');
+  assert.equal(calls.some((c) => c.url.includes('storage/v1/object')), false, 'no re-upload on dedup');
 });
 
-test('create: rejects bad names, refs, artwork', async () => {
+test('create: RPC failure never invents a planet (500 in dev)', async () => {
+  supaEnv();
+  stubFetch([['rest/v1/rpc/assign_planet', { status: 500, json: { message: 'boom' } }]]);
+  const res = mockRes();
+  await createHandler({ method: 'POST', headers: {}, body: baseBody() }, res);
+  assert.equal(res.statusCode, 500);
+});
+
+test('create: rejects bad names, refs, artwork, and missing candidates', async () => {
   supaEnv();
   stubFetch([]);
   for (const bad of [
@@ -152,6 +175,7 @@ test('create: rejects bad names, refs, artwork', async () => {
     { ...baseBody(), clientRef: 'not-a-uuid' },
     { ...baseBody(), image: 'https://example.com/x.png' },
     { ...baseBody(), image: 'data:image/png;base64,' + 'A'.repeat(Math.ceil((MAX_ARTWORK_BYTES * 4) / 3) + 100) },
+    { ...baseBody(), candidates: [] },
   ]) {
     const res = mockRes();
     await createHandler({ method: 'POST', headers: {}, body: bad }, res);
