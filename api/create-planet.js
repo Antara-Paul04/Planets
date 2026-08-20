@@ -1,5 +1,7 @@
 import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { decodeArtwork } from '../lib/validate-image.js';
+import { reporterIp } from '../lib/reports/ip.js';
+import { hashCreatorIp } from '../lib/reports/hash.js';
 
 // POST /api/create-planet
 // body: {
@@ -80,14 +82,22 @@ export default async function handler(req, res) {
     tilt: num(b.tilt) ?? 0.25,
   };
 
+  // one planet per network: the creator identity is a keyed HMAC of the
+  // request IP (server-derived, never from the body); the raw IP is not stored.
+  const creatorIpHash = hashCreatorIp(reporterIp(req));
+
   try {
-    const rpc = await db.rpcAssignPlanet({ clientRef: b.clientRef, candidates, extent, planet });
+    const rpc = await db.rpcAssignPlanet({ clientRef: b.clientRef, candidates, extent, planet, creatorIpHash });
     if (!rpc.ok || !Array.isArray(rpc.json) || !rpc.json[0]) {
       if (isProductionStrict()) { res.status(503).json({ error: 'universe_unavailable' }); return; }
       res.status(500).json({ error: 'create_failed' });
       return;
     }
     const a = rpc.json[0];
+
+    // this network has already created its one planet -- no capacity consumed,
+    // no star minted, no artwork uploaded (the RPC stopped before all of that)
+    if (a.planet_limit_reached) { res.status(409).json({ error: 'planet_limit_reached' }); return; }
 
     // the normalized name is already someone else's planet
     if (a.name_taken) { res.status(409).json({ error: 'name_taken' }); return; }

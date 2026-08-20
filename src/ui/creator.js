@@ -475,6 +475,10 @@ export function createCreator({ onLaunch, onPreview }) {
       nameInput.select();
       return;
     }
+    if (result && result.planetLimitReached) {
+      statusEl.textContent = 'this network has already made its planet.';
+      return;
+    }
     if (result && result.failed) {
       statusEl.textContent = result.unavailable
         ? 'the universe is temporarily unavailable.'

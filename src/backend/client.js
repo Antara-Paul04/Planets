@@ -63,7 +63,11 @@ export async function createPlanetRemote({ clientRef, name, canvas, candidates, 
       body: JSON.stringify(body),
     });
     if (res.status === 503) return { unavailable: true };
-    if (res.status === 409) return { nameTaken: true }; // someone already took that name
+    if (res.status === 409) {
+      const j = await res.json().catch(() => ({}));
+      if (j.error === 'planet_limit_reached') return { planetLimitReached: true }; // one planet per network
+      return { nameTaken: true }; // someone already took that name
+    }
     if (!res.ok) return IS_PROD ? { unavailable: true } : { error: true };
     const json = await res.json();
     if (json.fallback) return IS_PROD ? { unavailable: true } : { fallback: true };

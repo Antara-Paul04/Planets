@@ -202,6 +202,7 @@ const creator = createCreator({
     const clientRef = crypto.randomUUID();
     const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived });
     if (remote.nameTaken) return { nameTaken: true }; // the creator asks for another name
+    if (remote.planetLimitReached) return { planetLimitReached: true }; // one planet per network
     if (remote.unavailable) {
       universeStatus.classList.add('show');
       return { failed: true, unavailable: true }; // nothing spawns, drawing kept
