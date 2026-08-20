@@ -31,6 +31,7 @@ export function orbitExtentOf(scale, look) {
 export const GEO_HI = new THREE.SphereGeometry(1, 28, 20);
 export const GEO_MID = new THREE.SphereGeometry(1, 14, 10);
 export const GEO_LOW = new THREE.SphereGeometry(1, 8, 6);
+export const GEO_MOON = new THREE.SphereGeometry(1, 24, 16);
 
 const _toStar = new THREE.Vector3(); // scratch for per-frame star-direction updates
 
@@ -153,9 +154,48 @@ function makeRingMaterial(color, opacity, inner, outer, seed) {
   });
 }
 
-const MOON_MATS = [0xd8d2c4, 0xbfae9a, 0x9aa4b5].map(
-  (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 1 })
-);
+// A rocky, cratered moon face baked to a small equirectangular canvas: broad
+// tonal mottling plus craters (a dark basin with a bright sunlit rim). Rendered
+// with the same star-lighting shader as planets, so moons share the day/night
+// terminator instead of sitting there as flat white balls.
+function makeMoonTexture(rand, base) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  const x = c.getContext('2d');
+  x.fillStyle = base; x.fillRect(0, 0, 256, 128);
+  for (let i = 0; i < 60; i++) {
+    x.fillStyle = rand() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)';
+    x.beginPath(); x.arc(rand() * 256, rand() * 128, 6 + rand() * 22, 0, 7); x.fill();
+  }
+  const n = 22 + Math.floor(rand() * 18);
+  for (let i = 0; i < n; i++) {
+    const cx = rand() * 256, cy = rand() * 128, r = 1.5 + rand() * rand() * 15;
+    x.fillStyle = 'rgba(0,0,0,0.30)'; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+    x.strokeStyle = 'rgba(255,255,255,0.28)'; x.lineWidth = Math.max(0.8, r * 0.16);
+    x.beginPath(); x.arc(cx, cy, r * 0.9, Math.PI * 0.15, Math.PI * 1.1); x.stroke();
+    x.fillStyle = 'rgba(255,255,255,0.12)'; x.beginPath(); x.arc(cx - r * 0.35, cy - r * 0.35, r * 0.28, 0, 7); x.fill();
+  }
+  return c;
+}
+
+// lazy so the module never touches `document` at import time (node tests)
+let _moonTextures = null;
+function moonTextures() {
+  if (_moonTextures) return _moonTextures;
+  const rnd = mulberry32(0x510f);
+  _moonTextures = ['#8f8a7e', '#9a8f7c', '#83868f', '#75706a'].map((b) => {
+    const t = new THREE.CanvasTexture(makeMoonTexture(rnd, b));
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
+    t.anisotropy = 4;
+    return t;
+  });
+  return _moonTextures;
+}
+
+function makeMoonMaterial(texture) {
+  return applyStarLighting(new THREE.MeshStandardMaterial({ map: texture, roughness: 1 }));
+}
 
 const noRaycast = () => {};
 
@@ -190,7 +230,8 @@ export function buildPlanetVisual(material, look) {
     pivot.rotation.y = m.phase || 0;
     pivot.rotation.x = m.incl || 0; // moons orbit in their own tilted planes
     pivot.userData.speed = m.speed;
-    const moon = new THREE.Mesh(GEO_LOW, MOON_MATS[Math.floor((m.phase || 0) * 7) % MOON_MATS.length]);
+    const moonTex = moonTextures()[Math.floor((m.phase || 0) * 7) % moonTextures().length];
+    const moon = new THREE.Mesh(GEO_MOON, makeMoonMaterial(moonTex));
     moon.scale.setScalar(m.size);
     moon.position.x = m.dist;
     moon.raycast = noRaycast;
@@ -548,6 +589,12 @@ export class PlanetField {
     }
     if (p._atmoMat) p._atmoMat.dispose(); // per-planet atmosphere (also the aurora material)
     if (p._ringMat) p._ringMat.dispose();
+    if (p.moonPivots) {
+      for (const piv of p.moonPivots) {
+        const mm = piv.children[0];
+        if (mm && mm.material) mm.material.dispose(); // moon textures are shared, leave them
+      }
+    }
     // each planet now owns its surface material (hi + mid share this one
     // instance); dispose it. The map is unique only for user planets — pooled
     // random-planet textures are shared, so leave those alone.
@@ -630,6 +677,12 @@ export class PlanetField {
         const sl = p.surface.material.userData.starLight;
         if (sl) sl.uToStar.value.copy(_toStar);
         if (p._atmoMat) p._atmoMat.uniforms.uToStar.value.copy(_toStar); // glow scatters on the day limb
+        if (p.moonPivots) {
+          for (const piv of p.moonPivots) {
+            const msl = piv.children[0] && piv.children[0].material.userData.starLight;
+            if (msl) msl.uToStar.value.copy(_toStar); // moons share their planet's star
+          }
+        }
       }
     }
     for (const a of this._auroras) {
