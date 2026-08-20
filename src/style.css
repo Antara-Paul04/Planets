@@ -57,6 +57,13 @@ html, body {
   transition: opacity 3s ease;
 }
 #hint.faded { opacity: 0; }
+@media (max-width: 560px) {
+  #hint {
+    white-space: normal;
+    max-width: calc(100vw - 40px);
+    font-size: 10px; letter-spacing: 0.12em;
+  }
+}
 
 #create-btn {
   position: fixed; bottom: 34px; left: 50%;
@@ -515,16 +522,16 @@ body.ambient #audio-ctl {
 }
 .label-report {
   display: block;
-  margin: 6px auto 0;
+  margin: 8px auto 0;
   background: none; border: none;
-  font-family: var(--serif); font-style: italic;
-  font-size: 11px;
-  color: rgba(240, 234, 217, 0.3);
+  font-family: var(--mono); text-transform: uppercase;
+  font-size: 9.5px; letter-spacing: 0.14em;
+  color: var(--hud-faint);
   cursor: pointer;
   pointer-events: auto; /* the label wrapper ignores the pointer */
   transition: color 0.2s;
 }
-.label-report:hover { color: var(--ink-dim); }
+.label-report:hover { color: var(--hud-dim); }
 
 
 /* ---- production unavailable state ---- */
@@ -680,9 +687,8 @@ body.ambient #info-btn, body.ambient #search-btn { opacity: 0.25; transition: op
 
 /* ---- one-planet-per-browser: the quiet "already planted" state ---- */
 #create-btn.planted {
-  border-color: var(--line);
-  color: var(--ink-faint);
-  font-style: italic;
+  border-color: var(--hair);
+  color: var(--hud-faint);
   cursor: default;
   pointer-events: none; /* a quiet label, not a button */
   box-shadow: none;
