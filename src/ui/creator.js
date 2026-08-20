@@ -90,6 +90,7 @@ export function createCreator({ onLaunch, onPreview }) {
         <div class="name-row">
           <input class="name-input" maxlength="24" placeholder="name your planet" />
         </div>
+        <p class="name-status"></p>
         <div class="step-nav">
           <button class="btn-ghost btn-to-draw">back to drawing</button>
           <button class="btn-primary btn-to-preview">see your planet</button>
@@ -116,6 +117,7 @@ export function createCreator({ onLaunch, onPreview }) {
   const displayCtx = canvas.getContext('2d');
   const cursorEl = $('.brush-cursor');
   const nameInput = $('.name-input');
+  nameInput.addEventListener('input', () => { const ns = $('.name-status'); if (ns) ns.textContent = ''; });
 
   const painter = new Painter(CW, CH);
 
@@ -450,6 +452,14 @@ export function createCreator({ onLaunch, onPreview }) {
     launchBtn.disabled = false;
     launchBtn.textContent = 'launch planet';
 
+    if (result && result.nameTaken) {
+      showStep('style');
+      const ns = $('.name-status');
+      if (ns) ns.textContent = 'someone already named a planet that.';
+      nameInput.focus();
+      nameInput.select();
+      return;
+    }
     if (result && result.failed) {
       statusEl.textContent = result.unavailable
         ? 'the universe is temporarily unavailable.'

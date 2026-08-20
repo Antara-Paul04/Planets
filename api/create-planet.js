@@ -89,6 +89,9 @@ export default async function handler(req, res) {
     }
     const a = rpc.json[0];
 
+    // the normalized name is already someone else's planet
+    if (a.name_taken) { res.status(409).json({ error: 'name_taken' }); return; }
+
     // upload artwork unless this was an idempotent retry (already uploaded)
     if (!a.deduplicated) {
       const up = await db.uploadArtwork(artworkPath, art.buffer, art.contentType);

@@ -9,7 +9,10 @@ import { AmbientDirector } from './ambient.js';
 import { IntroDirector } from './intro.js';
 import { createInfoSheet } from './ui/info.js';
 import { TravelDirector } from './travel.js';
-import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas } from './backend/client.js';
+import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas, searchPlanets } from './backend/client.js';
+import { createSearch } from './ui/search.js';
+import { createPlanetCard } from './ui/planetCard.js';
+import { normalizeNameKey } from '../lib/name.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
 import { Soundscape } from './audio.js';
 
@@ -176,6 +179,7 @@ const audio = new Soundscape();
 // ---- launch ----
 const toast = document.getElementById('toast');
 let toastTimer = null;
+const planetCard = createPlanetCard();
 
 const creator = createCreator({
   onPreview: () => audio.tick(),
@@ -197,6 +201,7 @@ const creator = createCreator({
 
     const clientRef = crypto.randomUUID();
     const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived });
+    if (remote.nameTaken) return { nameTaken: true }; // the creator asks for another name
     if (remote.unavailable) {
       universeStatus.classList.add('show');
       return { failed: true, unavailable: true }; // nothing spawns, drawing kept
@@ -242,6 +247,9 @@ const creator = createCreator({
     findBtn.classList.remove('gone');
     refreshCreationGate(); // this browser has planted its one world
     audio.birth(); // something has just come into existence
+
+    // a keepsake to screenshot/share, once the creator overlay has closed
+    setTimeout(() => planetCard.show({ name, createdAt: createdAt || Date.now(), artworkCanvas: canvas }), 420);
 
     // let it sail away, then whisper where it went
     clearTimeout(toastTimer);
@@ -289,8 +297,9 @@ document.getElementById('info-btn').addEventListener('click', () => {
 });
 
 // ---- idle mode: the UI recedes when you stop (the camera stays put) ----
+let search = null; // the search panel is created after travel exists (below)
 const ambient = new AmbientDirector({
-  isBusy: () => creator.isOpen() || travel.active || (intro && intro.active) || info.isOpen(),
+  isBusy: () => creator.isOpen() || travel.active || (intro && intro.active) || info.isOpen() || (search && search.isOpen()),
   onEnter: () => {
     focus.clear();
     document.body.classList.add('ambient');
@@ -381,6 +390,49 @@ document.getElementById('jump-btn').addEventListener('click', () => {
   focus.clear();
   // travel locks `dest` for the whole flight; short hops use the focus glide
   if (!travel.begin(null, dest)) focus.focusStar(dest);
+});
+
+// ---- search the universe: find any planet by name, then fly there ----
+// Search runs on the server. In dev (no backend) it falls back to the loaded
+// field so the panel is still usable. Selecting a result reuses the existing
+// interstellar travel — you actually fly there, never teleport.
+async function runSearch(q) {
+  const { results } = await searchPlanets(q);
+  if (results.length || import.meta.env.PROD) return { results };
+  const key = normalizeNameKey(q);
+  const local = field.planets
+    .filter((p) => normalizeNameKey(p.name).includes(key))
+    .slice(0, 8)
+    .map((p) => ({ name: p.name, createdAt: p.createdAt, starId: p.solarSystemId }));
+  return { results: local };
+}
+
+function travelToPlanet(planet) {
+  const dist = camera.position.distanceTo(planet.position);
+  if (dist < 800) { focus.focus(planet); return; }
+  focus.clear();
+  const destStar = env.getStar(planet.solarSystemId) ?? [...env.stars].sort(
+    (a, b) => a.position.distanceTo(planet.position) - b.position.distanceTo(planet.position)
+  )[0];
+  if (!travel.begin(planet, destStar)) focus.focus(planet);
+}
+
+search = createSearch({
+  query: runSearch,
+  onSelect: (r) => {
+    if (travel.active || creator.isOpen()) return;
+    // the searched planet is (almost always) already loaded — fly to it
+    const key = normalizeNameKey(r.name);
+    const planet = field.planets.find((p) => normalizeNameKey(p.name) === key);
+    if (planet) { travelToPlanet(planet); return; }
+    // fallback: the planet isn't loaded here — fly to its star system
+    const star = env.getStar(r.starId);
+    if (star) { focus.clear(); if (!travel.begin(null, star)) focus.focusStar(star); }
+  },
+});
+document.getElementById('search-btn').addEventListener('click', () => {
+  if (travel.active) return;
+  search.isOpen() ? search.close() : search.open();
 });
 
 // ---- click (not drag) to focus a planet ----
@@ -540,4 +592,4 @@ renderer.setAnimationLoop(() => {
 });
 
 // debug handle for testing in the console (harmless in a prototype)
-window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info };
+window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info, search, planetCard };

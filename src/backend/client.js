@@ -63,6 +63,7 @@ export async function createPlanetRemote({ clientRef, name, canvas, candidates, 
       body: JSON.stringify(body),
     });
     if (res.status === 503) return { unavailable: true };
+    if (res.status === 409) return { nameTaken: true }; // someone already took that name
     if (!res.ok) return IS_PROD ? { unavailable: true } : { error: true };
     const json = await res.json();
     if (json.fallback) return IS_PROD ? { unavailable: true } : { fallback: true };
@@ -85,6 +86,20 @@ export async function fetchSharedPlanets() {
     };
   } catch {
     return { planets: [], stars: [], unavailable: IS_PROD };
+  }
+}
+
+// Name search runs on the server (see api/search). Returns a small list of
+// { name, createdAt, starId }; the client travels to the match with the
+// existing travel system.
+export async function searchPlanets(query) {
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return { results: [] };
+    const json = await res.json();
+    return { results: Array.isArray(json.results) ? json.results : [] };
+  } catch {
+    return { results: [] };
   }
 }
 
