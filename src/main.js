@@ -529,7 +529,8 @@ fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }
   }
 }).catch(() => { /* degraded: procedural universe still works */ });
 
-const perf = createPerfPanel({ renderer, field });
+// dev-only diagnostic (fps / draw calls / tris) — never shown to real visitors
+const perf = import.meta.env.DEV ? createPerfPanel({ renderer, field }) : { tick() {} };
 
 // reporting: three DIFFERENT people reporting a planet removes it.
 // The server derives the reporter identity; nothing personal is collected.
