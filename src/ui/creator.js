@@ -308,7 +308,7 @@ export function createCreator({ onLaunch, onPreview }) {
   function ensurePreview() {
     if (preview) return preview;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    const px = Math.min(560, window.innerWidth - 48, window.innerHeight - 280);
+    const px = Math.min(560, window.innerWidth - 24, Math.max(240, window.innerHeight - 200));
     renderer.setSize(px, px);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
