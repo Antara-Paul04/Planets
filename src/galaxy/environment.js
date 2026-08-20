@@ -324,6 +324,7 @@ export class Environment {
     this._buildNebulae(rand);
     this._buildAsteroids(rand);
     this._buildMotes(rand);
+    this._buildDeepDust();
   }
 
   _buildBackgroundStars(rand) {
@@ -488,6 +489,12 @@ export class Environment {
   }
 
   _buildNebulae(rand) {
+    // R2: a couple of these are re-anchored into true world space at real
+    // density-region centres so approaching a region's colour means approaching
+    // an actual place (parallax, growing scale), not a camera-pinned wash. The
+    // world jitter draws from its OWN salt so the shared chain — and every
+    // star / asteroid / mote seeded after this — stays byte-identical.
+    const worldRand = seededRand(0x9b3c);
     NEBULA_HUES.forEach(([h1, h2], i) => {
       const tex = makeGlowSprite([
         [0, `hsla(${h1}, 55%, 58%, 0.42)`],
@@ -500,8 +507,8 @@ export class Environment {
         blending: THREE.AdditiveBlending, depthWrite: false,
       });
       const sprite = new THREE.Sprite(mat);
-      // bias a couple of nebulae behind density regions so drifting toward
-      // color also means drifting toward things
+      // shared-chain rand() calls below are preserved verbatim (same count, same
+      // order) so nothing downstream shifts; world nebulae override the result.
       let dir;
       if (i < this.regions.length && rand() < 0.6) dir = this.regions[i].center.clone().normalize();
       else { dir = new THREE.Vector3(rand() * 2 - 1, (rand() * 2 - 1) * 0.5, rand() * 2 - 1).normalize(); }
@@ -510,7 +517,22 @@ export class Environment {
       sprite.scale.set(s, s * (0.55 + rand() * 0.5), 1);
       sprite.userData.baseOpacity = mat.opacity;
       sprite.userData.phase = rand() * Math.PI * 2;
-      this.sky.add(sprite);
+
+      if (i < 3 && i < this.regions.length) {
+        // anchor into world space near a real region centre — a distant
+        // landmark, deliberately NOT a screen-filling cloud
+        const reg = this.regions[i];
+        const off = new THREE.Vector3(worldRand() * 2 - 1, (worldRand() * 2 - 1) * 0.4, worldRand() * 2 - 1)
+          .multiplyScalar(reg.radius * 0.35);
+        sprite.position.copy(reg.center).add(off);
+        const ws = 2400 + worldRand() * 1800;
+        sprite.scale.set(ws, ws * (0.62 + worldRand() * 0.28), 1);
+        sprite.userData.world = true;
+        this.scene.add(sprite);
+      } else {
+        // the rest stay camera-pinned as far, unreachable wallpaper
+        this.sky.add(sprite);
+      }
       this._nebulae.push(sprite);
     });
   }
@@ -556,6 +578,120 @@ export class Environment {
   _buildMotes(rand) {
     this._motes = starField(this._sprite, rand, 240, 50, 260, 1.6, 0.45);
     this.skyNear.add(this._motes);
+  }
+
+  // R1: one world-fixed deep-space dust layer. Unlike the sky / skyNear groups
+  // (which re-centre on the camera every frame and can never be approached),
+  // these points live in TRUE world space and are never moved — so crossing the
+  // void makes them drift and slide past: the one real depth cue between
+  // systems. Biased to the density regions and to lanes between neighbouring
+  // stars; the space in between stays deliberately empty. One shared Points =
+  // one draw call. Its own seed salt, so it can never shift any existing object.
+  _buildDeepDust() {
+    const rand = seededRand(0x0d05);
+    const COUNT = 8000;
+    const pos = new Float32Array(COUNT * 3);
+    const col = new Float32Array(COUNT * 3);
+    const size = new Float32Array(COUNT);
+    const v = new THREE.Vector3();
+    const regions = this.regions;
+
+    // seeded lanes: neighbouring stars close enough to string faint dust between
+    const lanes = [];
+    for (let a = 0; a < this.stars.length; a++) {
+      for (let b = a + 1; b < this.stars.length; b++) {
+        if (this.stars[a].position.distanceTo(this.stars[b].position) < 6500) {
+          lanes.push([this.stars[a].position, this.stars[b].position]);
+        }
+      }
+    }
+
+    const put = (i, p) => {
+      pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+      // muted white / grey, a whisper of temperature — far dimmer than any star
+      const b = 0.32 + rand() * 0.33;
+      const t = rand();
+      let r = 1, g = 1, bl = 1;
+      if (t < 0.5) { r = 0.9; g = 0.93; bl = 1.0; }         // cool white
+      else if (t < 0.85) { r = 0.96; g = 0.96; bl = 0.95; } // neutral grey
+      else { r = 1.0; g = 0.95; bl = 0.88; }                // faint warm
+      col[i * 3] = b * r; col[i * 3 + 1] = b * g; col[i * 3 + 2] = b * bl;
+      size[i] = 0.8 + rand() * 1.6;
+    };
+
+    for (let i = 0; i < COUNT; i++) {
+      const roll = rand();
+      if (roll < 0.68 && regions.length) {
+        // soft, disc-flattened fill concentrated toward a region centre
+        const reg = regions[Math.floor(rand() * regions.length)];
+        v.set(rand() * 2 - 1, (rand() * 2 - 1) * 0.45, rand() * 2 - 1)
+          .normalize()
+          .multiplyScalar(reg.radius * Math.pow(rand(), 0.55))
+          .add(reg.center);
+        put(i, v);
+      } else if (roll < 0.93 && lanes.length) {
+        // dust strung along a lane between two neighbouring systems
+        const [pa, pb] = lanes[Math.floor(rand() * lanes.length)];
+        v.lerpVectors(pa, pb, rand());
+        v.x += (rand() * 2 - 1) * 600;
+        v.y += (rand() * 2 - 1) * 320;
+        v.z += (rand() * 2 - 1) * 600;
+        put(i, v);
+      } else if (regions.length) {
+        // a few faint satellites just outside a region — softens the edge,
+        // still leaves genuine interstellar gaps empty
+        const reg = regions[Math.floor(rand() * regions.length)];
+        v.set(rand() * 2 - 1, (rand() * 2 - 1) * 0.4, rand() * 2 - 1)
+          .normalize()
+          .multiplyScalar(reg.radius * (1.05 + rand() * 0.6))
+          .add(reg.center);
+        put(i, v);
+      } else {
+        v.set(rand() * 2 - 1, (rand() * 2 - 1) * 0.4, rand() * 2 - 1)
+          .normalize().multiplyScalar(4000 + rand() * 8000);
+        put(i, v);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uMap: { value: this._sprite } },
+      vertexShader: /* glsl */ `
+        attribute vec3 aColor;
+        attribute float aSize;
+        varying vec3 vColor;
+        varying float vA;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          float d = -mv.z;
+          // distant -> almost invisible, easing up smoothly as you approach.
+          // no hard pop-in, no fog: just per-point fade with view depth.
+          vA = 1.0 - smoothstep(9000.0, 30000.0, d);
+          vColor = aColor;
+          gl_PointSize = clamp(aSize * (780.0 / d), 0.6, 2.6);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uMap;
+        varying vec3 vColor;
+        varying float vA;
+        void main() {
+          vec4 t = texture2D(uMap, gl_PointCoord);
+          gl_FragColor = vec4(vColor, t.a * vA * 0.6);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false; // one world-spanning cloud; never cull it whole
+    this._deepDust = points;
+    this.scene.add(points);
   }
 
   // rare-event director: one thing at a time, long quiet stretches between
@@ -607,7 +743,16 @@ export class Environment {
     }
     this._motes.rotation.y += dt * 0.004;
     for (const n of this._nebulae) {
-      n.material.opacity = n.userData.baseOpacity * (0.8 + 0.2 * Math.sin(this.time * 0.006 + n.userData.phase)) * (this.skyDim ?? 1);
+      const breathe = 0.8 + 0.2 * Math.sin(this.time * 0.006 + n.userData.phase);
+      if (n.userData.world) {
+        // world-anchored: fade in as you approach, and stay visible during
+        // travel (approaching a region is exactly when you want to see it)
+        const d = n.position.distanceTo(this.camera.position);
+        const vis = 1 - THREE.MathUtils.smoothstep(d, 16000, 46000);
+        n.material.opacity = n.userData.baseOpacity * breathe * vis;
+      } else {
+        n.material.opacity = n.userData.baseOpacity * breathe * (this.skyDim ?? 1);
+      }
     }
     for (const c of this._clusters) c.rotation.y += c.userData.spin * dt;
 
