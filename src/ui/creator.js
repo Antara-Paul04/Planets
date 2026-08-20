@@ -308,7 +308,7 @@ export function createCreator({ onLaunch, onPreview }) {
   function ensurePreview() {
     if (preview) return preview;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    const px = Math.min(420, window.innerWidth - 80, window.innerHeight - 300);
+    const px = Math.min(560, window.innerWidth - 48, window.innerHeight - 280);
     renderer.setSize(px, px);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -370,7 +370,22 @@ export function createCreator({ onLaunch, onPreview }) {
     if (psl) { psl.uToStar.value.set(0.25, 0.18, 1).normalize(); psl.uAmbient.value = 0.34; psl.uDayStrength.value = 0.9; }
     previewPlanet.group.rotation.z = derived.tilt * 0.5;
     p.scene.add(previewPlanet.group);
-    p.camera.position.set(0, 0.5, derived.look.rings ? 5.6 : 3.7);
+
+    // Frame the camera to the planet's TRUE extent so rings and moons are never
+    // clipped by the preview box — at any spin or orbit angle. A moon sits
+    // (dist + size) from centre at every point of its orbit; a ring reaches
+    // rings.outer; a bare planet is radius ~1. Fit that whole reach (with a
+    // little breathing room) instead of a hard-coded distance.
+    let extent = 1.1;
+    const lk = derived.look;
+    if (lk.rings) extent = Math.max(extent, lk.rings.outer);
+    for (const piv of previewPlanet.moonPivots) {
+      const moon = piv.children[0];
+      if (moon) extent = Math.max(extent, Math.abs(moon.position.x) + moon.scale.x);
+    }
+    const halfFov = (p.camera.fov * Math.PI) / 180 / 2;
+    const dist = (extent * 1.15) / Math.tan(halfFov);
+    p.camera.position.set(0, dist * 0.135, dist);
     p.camera.lookAt(0, 0, 0);
   }
 
