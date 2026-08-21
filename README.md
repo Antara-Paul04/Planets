@@ -16,6 +16,10 @@ universe seed.
     npm install
     npm run dev
 
+`npm run dev` serves the front end on :5173 and proxies `/api/*` to :3000.
+Run `vercel dev` alongside it for the backend, or every `/api` call answers 500
+and the universe boots empty.
+
 ## The loop
 
 explore → make a planet → draw → make it yours → name → preview → launch → explore
