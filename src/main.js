@@ -267,7 +267,7 @@ const creator = createCreator({
 });
 
 // ---- one planet per browser (soft, localStorage-only) ----
-// A gentle "you've already planted one" once this browser has a planet. No
+// A gentle "your world is out there" once this browser has a planet. No
 // server enforcement, no IP, no device id — clearing storage or a new browser
 // lets you plant again. It just keeps a single visitor from filling the sky.
 const createBtn = document.getElementById('create-btn');
@@ -280,7 +280,7 @@ function hasOwnPlanet() {
 function refreshCreationGate() {
   const planted = hasOwnPlanet();
   createBtn.classList.toggle('planted', planted);
-  createBtn.textContent = planted ? "you've already planted one" : 'make a planet';
+  createBtn.textContent = planted ? 'your world is out there' : 'make a planet';
 }
 refreshCreationGate();
 

@@ -1,169 +1,110 @@
-# planets — a quiet universe (prototype)
+<div align="center">
 
-People make planets. The universe makes the rest.
+# ✦ Astray
 
-An ambient 3D universe of user-created planets: draw on a 2D canvas, style it,
-name it, launch it — and if you're near a sun when you launch, your planet
-joins that solar system. Leave the page open and the universe keeps going:
-the camera drifts, comets pass, stars burn, meteor showers come and go.
+**a quiet universe where people draw planets and leave them for others to find**
 
-No backend, no accounts. Your latest planet is remembered in localStorage
-("find my planet"); everything else regenerates deterministically from the
-universe seed.
+[**enter the universe →**](https://go-astray.vercel.app)
 
-## Run
+*there are worlds out there.*
 
-    npm install
-    npm run dev
+</div>
 
-`npm run dev` serves the front end on :5173 and proxies `/api/*` to :3000.
-Run `vercel dev` alongside it for the backend, or every `/api` call answers 500
-and the universe boots empty.
+---
+
+Astray is an ambient 3D universe you can wander. Draw a planet on a little
+canvas, name it, and launch it — it sails off, finds a star, and starts to
+orbit. Then it's just… there, quietly circling its sun, for anyone who drifts
+by. No feed, no likes, no profiles. Just planets.
+
+People make the planets. The universe makes the rest.
 
 ## The loop
 
-explore → make a planet → draw → make it yours → name → preview → launch → explore
+**explore → make a planet → draw it → make it yours → name it → launch → discover**
 
-- **Drawing toy**: pencil / pen / marker / brush / highlighter / eraser / fill /
-  line / box / circle / blob / stamps (13 hand-drawn) / patterns / text (4 fonts),
-  5 curated palettes + free color, brush sizes, ink opacity, symmetry (mirror /
-  flip / kaleidoscope), doodle helpers, background layer, undo/redo (⌘Z / ⌘⇧Z).
-  Strokes draw thrice (x±width) so artwork tiles seamlessly around the seam.
-- **Make it yours**: surface type (material), atmosphere (+color), optional vibe.
-  Rings, moons, aurora, placement, orbits: the universe decides.
-- **Launch**: the planet sails from the camera to its spot; a quiet toast says
-  where it went ("now circling a sun" if it joined a system).
+- **Draw** — one honest brush, a curated palette, a few sizes, an eraser, undo/redo. The left and right edges wrap, so your art meets itself around the back of the sphere.
+- **Make it yours** — pick a surface and a mood. Whether it gets rings, moons, or neither is the universe's call, not yours.
+- **Launch** — your world glides from the camera out to its orbit around a real star; a quiet line tells you where it went.
+- **Discover** — search the universe by name (every name is unique) and travel to any planet. Made one you love? Share its collectible card.
 
-## Architecture
+## What it feels like
 
-- `src/galaxy/universe.js` — universe seed + density regions (future galaxy/cluster hook)
-- `src/galaxy/scene.js` — renderer, camera, controls, base lighting
-- `src/galaxy/environment.js` — seeded backdrop & events: background/twinkle stars,
-  major suns, nebulae, asteroid fields (InstancedMesh), drifting motes, and the
-  rare-event director (comets, meteor showers, solar flares) with long cooldowns
-- `src/galaxy/stars.js` — major stars: animated plasma shader + limb corona,
-  LOD + click proxies, 5 star types, extent-aware orbit assignment with
-  per-system planes (`star → solar system → planets`), shared orbit-path lines
-- `src/galaxy/planets.js` — PlanetField: LOD planets (full / low-poly / tinted far),
-  pooled materials, procedural rings/moons/aurora, vibes, orbits, travel/spawn anims
-- `src/galaxy/textures.js` — procedural 256×128 surfaces for seeded planets
-- `src/galaxy/atmosphere.js` — per-pixel bell-falloff rim glow (no halo ring)
-- `src/ui/creator.js` + `src/ui/painter.js` + `src/ui/stamps.js` — creation flow,
-  two-layer paint engine, live wrap preview, rotatable final preview
-- `src/ambient.js` — idle-triggered procedural camera drift (organic legs, no loops),
-  UI fade; any interaction returns control instantly
-- `src/travel.js` — interstellar travel director (orient → cruise → settle),
-  GPU star-streak field, sky dimming, exposure/FOV swell, Escape-cancel
-- `src/audio.js` — optional generative WebAudio soundscape (hum/pad/air layers +
-  soft lone tones) that responds to suns, dense regions, comets, meteors, flares
-- `src/focus.js` — click-to-visit camera flight (sunlit-side approach, follows
-  orbiting planets), minimal name label
-- `src/perf.js` — fps/draw-call readout + 50–1000 planet stress buttons (press `p`)
+- A **spacecraft-instrument HUD** — hairline strokes, condensed type, restrained amber — laid over a living 3D sky.
+- **Real depth**: a world-fixed dust field and distant nebulae that drift and resolve as you cross the void, so travel actually *feels* like distance.
+- Planets **lit by their own suns** (true day/night terminators), cratered moons, banded rings.
+- A **generative soundscape** that responds to nearby suns, dense regions, and the occasional passing comet.
+- **Made for phones too** — recomposed for touch, not shrunk from desktop.
 
-## Star capacity (v15)
+## Anonymous by design
 
-Every star supports a maximum number of USER planets, derived deterministically
-from its type (no storage, no randomness): blue 4, white 6, orange 9, yellow 12,
-red 15 — ordered by the type's characteristic size. Assignment is
-server-authoritative and atomic: the browser proposes candidate stars
-(nearest-first); the `assign_planet` Postgres RPC picks the first with a free
-slot — locking per-star so simultaneous creators can't overflow a system —
-computes a fresh non-colliding orbital band, and inserts the planet. Capacity
-counts ALL rows for a star (hidden included: hiding never frees a slot). If
-every candidate is full, a new star is minted deterministically (id >=
-1,000,000, position/type derived from an id hash) far out and persisted;
-existing deterministic stars (ids 0..N) and their positions/planets never
-change. Capacity is invisible — no meters, no "4/6" UI. Only user planets
-exist; nothing is auto-populated. Migration `002_star_capacity.sql`.
+No accounts, no logins, no profiles, no tracking, no cookies. The only rules are quiet and fair:
 
-## Backend: Supabase persistence + reporting (v13-v14)
+- **One planet per network.** A single public IP can create one planet — enforced in the database via a one-way HMAC of the IP; the raw IP is never stored. It's per-*network*, not per-person: a VPN or a different network gets another, and people sharing a connection share a slot.
+- **Community moderation.** A planet reported by **three different networks** is hidden. Reporter identities are one-way hashes; a creator never learns who reported.
 
-User-created planets persist in Supabase (free plan): a `planets` table
-(UUID, name, birth date, star relationship, 3D position, orbit parameters,
-moons-XOR-rings config, visibility status), a `stars` table (deterministic
-suns; zero-planet stars are fine), and `planet_reports`. Artwork lives in
-the public-read `planet-artwork` Storage bucket (512x256 PNG, ~30-80KB,
-capped at 300KB) — the DB stores only `artwork_path`. The browser talks
-only to `/api/*` (Vercel functions); the service-role key is server-only;
-RLS is enabled with anon read access limited to visible planets and stars.
+Full, plain-English details in [`PRIVACY.md`](PRIVACY.md).
 
-The whole moderation rule: **three DIFFERENT IP addresses report a planet
-and it becomes hidden** — enforced atomically in the `report_planet()`
-Postgres function with a `(planet_id, reporter_ip_hash)` unique constraint.
-Reporter IPs are stored only as server-side HMAC digests; the client can
-never supply its own IP (trusted proxy headers only — Vercel overwrites
-`x-real-ip`/`x-forwarded-for`). Hidden planets keep their row and artwork
-but never leave the database through public queries. No accounts, no
-identities, nothing personal anywhere.
+## Run it locally
 
-Setup: create a free Supabase project, run
-`supabase/migrations/001_initial_schema.sql` in the SQL editor, then set
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and
-`REPORT_IP_SALT` (see `.env.example`). Without them the app runs exactly
-as before, local-only. World state is written once per creation; orbital
-motion stays client-side (no per-frame writes).
+```bash
+npm install
+npm run dev        # front end on :5173, proxies /api → :3000
+vercel dev         # second terminal — serves the /api functions
+```
 
-## Identity & satellites (v10-v11)
+> **Heads up:** `npm run dev` alone leaves `/api/*` unanswered — every call 500s and the universe boots empty. Run `vercel dev` alongside it for the backend.
 
-Every planet carries a permanent `created_at` — seeded worlds are born at a
-deterministic moment in the universe's past; user planets at launch; the
-focus label shows it as "born · 19 August 2026". Satellites are exclusive:
-a planet has moons, or rings, or neither (~70/20/10) — enforced in the data
-model, with persisted conflicts resolved deterministically (moons win) and
-written back once. Rings are banded dusty debris (radial shader with grain
-and a gap, per-planet seed) in the planet's equatorial plane; moons orbit in
-their own tilted planes. The soundscape gained planet-proximity and
-interstellar-emptiness layers, a quiet birth chime on launch, slow
-irrational-period drifts so nothing loops, and distance-attenuated events.
-Camera feel: interruptible focus flights (grab mid-flight to take over),
-free-space pivot re-anchoring, livelier rotate/pan, and a lag-following
-near-sky layer for parallax.
+```bash
+npm test           # node --test
+```
 
-## Interstellar travel (v9)
+## Backend (optional — it runs local-only without it)
 
-"Find my planet" from another system is a continuous physical journey, not a
-teleport: the camera turns toward the destination, pulls back half a step,
-then accelerates along a slightly-arced path. A GPU streak field (one
-LineSegments draw call, 420 segments, scrolling-corridor shader) stretches
-star-trails along the actual travel direction, scaled by actual camera speed —
-so acceleration and deceleration read naturally. The decorative sky dims at
-speed, exposure and FOV swell slightly, and the soundscape (if on) rises like
-space itself changing. Duration scales with real distance (~4s near, capped
-8.5s across the universe). The destination resolves the same way any system
-does — beacon → star → orbit lines → planets — and the sequence hands off to
-the normal planet-focus flight. Escape decelerates smoothly and returns
-control; controls, planet clicks, and creation are locked while traveling;
-ambient mode is suspended and resumes after arrival inactivity.
+Persistence is a free **Supabase** project (Postgres + Storage) behind **Vercel**
+serverless functions. The browser only ever talks to `/api/*`; the service-role
+key stays server-side.
 
-## Spatial scale (v8)
+1. Create a Supabase project and run the migrations **in order** in the SQL editor:
+   `001_initial_schema` → `002_star_capacity` → `003_unique_names_and_search` → `004_creator_ip_limit`.
+2. Set the vars from [`.env.example`](.env.example): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `REPORT_IP_SALT`.
 
-Solar systems span ~50-200 units; neighboring stars sit 2,600-18,000 apart —
-the universe is mostly empty space. From interstellar range a whole system
-collapses into a single warm point of light (a clamped-size "beacon"); planets
-vanish entirely (empty LOD level) long before their star does. Click a distant
-beacon to cross the void — the system reveals itself progressively on approach.
-The decorative sky (background stars, nebulae, motes) follows the camera; the
-real universe does not. Zoom is multiplicative, so it is scale-aware by nature.
+Artwork (a small WebP) lives in a public Storage bucket; the database stores only
+the path. Without the env vars the app still runs — everything regenerates from
+the universe seed, planets just don't persist.
 
-## Performance (measured, forced GPU sync)
+## How the universe works
 
-- 64 planets + full environment: ~5 ms/frame
-- 1000 planets, camera inside a system: ~8 ms/frame, ~140 draw calls
-- planets beyond visibility are frozen: no rotation, no orbit advance, no
-  per-frame matrix recomposition (≈880 of 1000 frozen at any moment)
+- **Deterministic.** Stars, density regions, and the deep-space backdrop all
+  derive from a single `UNIVERSE_SEED`, so space looks the same on every visit —
+  only user planets are dynamic.
+- **Server-authoritative placement.** The browser proposes nearby stars; the
+  `assign_planet` Postgres function atomically picks the first with a free slot
+  (locking per-star), computes a non-colliding orbit, and inserts the planet.
+- **Stars fill up; the universe grows.** Capacity by type — blue 4 · white 6 ·
+  orange 9 · yellow 12 · red 15. When every nearby star is full, a brand-new star
+  is minted deterministically, far out, to home your world. Creation is never
+  blocked for space.
+- **Interstellar travel.** "Find my planet" from across the universe is a real
+  journey: the camera arcs toward the destination, star-trails stretch by actual
+  speed, the sky dims, and the system resolves beacon → star → orbits → planets
+  on approach.
 
-Techniques: shared geometry, pooled materials/textures (ring geometry cache
-quantized to stay bounded), THREE.LOD with a vanish level, frozen matrices on
-every static object, instanced asteroids, two shared star point-lights that
-follow the nearest suns, one shared unit-circle geometry + one line material
-per system for all orbit paths (faded and hidden by distance), no
-post-processing, pixelRatio capped at 2.
+## Map of the code
 
-## Data model (backend-ready, not yet wired)
+```
+src/
+  galaxy/    universe seed · scene · animated stars · planets · deep-space environment
+  ui/        creation flow (draw · make-it-yours · preview) · search · info · planet card
+  main.js    wiring · the one-world gate · toasts
+  travel.js  interstellar-journey director      focus.js   click-to-visit flights
+  audio.js   generative soundscape              style.css  instrument UI + responsive layer
+api/         create-planet · planets · report · search   (Vercel serverless)
+lib/         db · name normalization · image validation · reports (IP→HMAC) · creation limit
+supabase/    migrations 001–004
+```
 
-    stars { id, position, type, radius, seed }        ← deterministic from universe seed
-    solar_systems ≡ star.id
-    planets { id, solarSystemId?, orbit?, position, name, artwork(dataURL), look, createdAt }
+Built with vanilla [Three.js](https://threejs.org) + [Vite](https://vitejs.dev),
+no framework. Made for the joy of it.
 
-`localStorage['planets.myPlanet.v1']` holds the user's latest planet in exactly
-this shape; swapping in Supabase later means persisting the same objects.
+<div align="center"><sub>go plant something.</sub></div>
