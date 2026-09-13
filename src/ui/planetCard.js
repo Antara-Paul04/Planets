@@ -5,7 +5,7 @@ import { slugForName } from '../../lib/song.js';
 // The loop is: make one -> send its link -> they open it and fly straight to
 // it (the song plays, the line appears) -> they make one back.
 
-export function createPlanetCard() {
+export function createPlanetCard({ onWallpaper } = {}) {
   const overlay = document.createElement('div');
   overlay.id = 'planet-card';
   overlay.innerHTML = `
@@ -19,6 +19,7 @@ export function createPlanetCard() {
       <div class="card-actions">
         <button class="card-share btn-primary">send it</button>
         <button class="card-copy btn-ghost">copy link</button>
+        <button class="card-wall btn-ghost">wallpaper</button>
         <button class="card-done btn-ghost">done</button>
       </div>
       <div class="card-foot">a planet in the universe</div>
@@ -28,6 +29,7 @@ export function createPlanetCard() {
   const coinHolder = overlay.querySelector('.card-coin');
   const shareBtn = overlay.querySelector('.card-share');
   const copyBtn = overlay.querySelector('.card-copy');
+  const wallBtn = overlay.querySelector('.card-wall');
   const doneBtn = overlay.querySelector('.card-done');
   const linkEl = overlay.querySelector('.card-link');
 
@@ -170,19 +172,27 @@ export function createPlanetCard() {
 
   shareBtn.addEventListener('click', share);
   copyBtn.addEventListener('click', copyLink);
+  wallBtn.addEventListener('click', async () => {
+    if (!current || !onWallpaper) return;
+    const prev = wallBtn.textContent;
+    wallBtn.textContent = 'making it…';
+    try { const r = await onWallpaper(current); wallBtn.textContent = r === 'downloaded' ? 'saved ✓' : prev; }
+    catch { wallBtn.textContent = prev; }
+    setTimeout(() => { wallBtn.textContent = prev; }, 1600);
+  });
   doneBtn.addEventListener('click', () => close());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
 
-  function show({ name, createdAt, artworkCanvas, message = null, song = null }) {
-    current = { name, createdAt, artwork: artworkCanvas, message, song };
+  function show({ name, createdAt, artworkCanvas, message = null, song = null, voiceUrl = null, revealAt = null }) {
+    current = { name, createdAt, artwork: artworkCanvas, message, song, voiceUrl, revealAt };
     overlay.querySelector('.card-name').textContent = name;
     linkEl.textContent = linkFor(current).replace(/^https?:\/\//, '');
-    overlay.querySelector('.card-where').textContent = song && message
-      ? 'with a song and a line, waiting for them'
-      : song ? 'with a song, waiting for them'
-        : message ? 'with a line, waiting for them'
-          : 'somewhere in the universe';
+    const carried = [song && 'a song', message && 'a line', voiceUrl && 'your voice'].filter(Boolean);
+    const sealed = revealAt && Date.parse(revealAt) > Date.now();
+    overlay.querySelector('.card-where').textContent = carried.length
+      ? `with ${carried.join(' and ')}${sealed ? `, sealed until ${new Date(revealAt).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}` : ', waiting for them'}`
+      : 'somewhere in the universe';
     const born = overlay.querySelector('.card-born');
     born.textContent = createdAt ? 'born ' + fmtDate(createdAt) : '';
     coinHolder.innerHTML = '';

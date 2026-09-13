@@ -52,6 +52,22 @@ We separate this into two kinds of information:
 A planet is **not** connected to your name, email, or any account, because none
 of those exist.
 
+## Voice lines and sealed planets
+
+A planet can carry a **voice line** of up to ten seconds that you record in
+your browser when you make it. Like the artwork and the name, it is
+**public**: anyone who reaches the planet can play it. It is stored as a file
+alongside the artwork and is removed with the planet if the planet is hidden
+by reports or deleted. Nothing is recorded unless you press record, and you
+can hear it and remove it before launching. The recording is never analysed,
+transcribed, or used for anything other than playing it back on your planet.
+
+A planet can also be **sealed** until a day you pick. Until then the server
+sends the planet without its line, song and voice; only the planet itself
+(name, artwork, orbit) and the opening date are visible. The seal is a
+delivery choice, not a privacy control: once the day arrives, everything on
+the planet is public like any other.
+
 ## Artwork
 
 You draw your planet's surface yourself. Before upload, your browser

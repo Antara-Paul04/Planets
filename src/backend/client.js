@@ -36,7 +36,7 @@ function flatten(canvas, w = 512, h = 256) {
 // The client proposes candidate stars (nearest-first) + the planet's visual
 // extent; the SERVER decides the final star and orbit (capacity is enforced
 // server-side, never here).
-export async function createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived, song = null, message = null }) {
+export async function createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived, song = null, message = null, voice = null, revealAt = null }) {
   let image;
   try {
     image = flatten(canvas);
@@ -61,6 +61,8 @@ export async function createPlanetRemote({ clientRef, name, canvas, candidates, 
     // URL), and one line. The server re-validates both.
     song: song ? { provider: song.provider, id: song.id, start: song.start || 0 } : null,
     message: message || null,
+    voice: voice || null,       // a browser recording as a data URL, <= 10s
+    revealAt: revealAt || null, // sealed until this moment (ISO), or open from birth
   };
   try {
     const res = await fetch('/api/create-planet', {
@@ -73,6 +75,10 @@ export async function createPlanetRemote({ clientRef, name, canvas, candidates, 
       const j = await res.json().catch(() => ({}));
       if (j.error === 'planet_limit_reached') return { planetLimitReached: true }; // one planet per network
       return { nameTaken: true }; // someone already took that name
+    }
+    if (res.status === 400) {
+      const j = await res.json().catch(() => ({}));
+      if (j.error === 'invalid_voice') return { error: true, badVoice: true };
     }
     if (!res.ok) return IS_PROD ? { unavailable: true } : { error: true };
     const json = await res.json();
@@ -115,9 +121,9 @@ export async function searchPlanets(query) {
 
 // The exact lookup behind /p/<name>. Returns { planet } (name, createdAt,
 // starId, artworkUrl, song, message) or { notFound } / { unavailable }.
-export async function fetchPlanetByName(name) {
+export async function fetchPlanetByName(name, { fresh = false } = {}) {
   try {
-    const res = await fetch(`/api/planet?name=${encodeURIComponent(name)}`);
+    const res = await fetch(`/api/planet?name=${encodeURIComponent(name)}${fresh ? `&r=${Date.now()}` : ''}`);
     if (res.status === 404) return { notFound: true };
     if (!res.ok) return { unavailable: true };
     const json = await res.json();
@@ -127,12 +133,12 @@ export async function fetchPlanetByName(name) {
   }
 }
 
-export async function reportPlanetRemote(planetId) {
+export async function reportPlanetRemote(planetId, reason = null) {
   try {
     const res = await fetch('/api/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planetId }),
+      body: JSON.stringify({ planetId, reason: reason || null }),
     });
     if (res.status === 503) return { ok: false, unavailable: true };
     if (!res.ok) return { ok: false, unavailable: IS_PROD };

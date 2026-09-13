@@ -14,6 +14,10 @@ import { songUrl } from '../lib/song.js';
 // image. When the built HTML can't be read (local `vercel dev` before a build)
 // a tiny shell with the same tags redirects to the app instead.
 
+export const sealDate = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? 'later' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+};
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export function ogTags({ url, title, description, image }) {
@@ -45,10 +49,15 @@ export function describe(planet, slug, origin) {
     return { url, title: 'a planet in ASTRAY', description: 'someone made a planet. tap to fly there.', image };
   }
   const title = `${planet.name} · a planet in ASTRAY`;
-  const hear = planet.song ? (planet.song.title ? ` and hear “${planet.song.title}”` : ' and hear its song') : '';
-  const description = planet.message
-    ? `“${planet.message}” — tap to fly there${hear}.`
-    : `a planet someone made. tap to fly there${hear}.`;
+  let description;
+  if (planet.sealed) {
+    description = `sealed until ${sealDate(planet.revealAt)}. tap to fly there and wait with it.`;
+  } else {
+    const hear = planet.song ? (planet.song.title ? ` and hear “${planet.song.title}”` : ' and hear its song') : (planet.voiceUrl ? ' and hear their voice' : '');
+    description = planet.message
+      ? `“${planet.message}” — tap to fly there${hear}.`
+      : `a planet someone made. tap to fly there${hear}.`;
+  }
   return { url, title, description, image, song: songUrl(planet.song) };
 }
 

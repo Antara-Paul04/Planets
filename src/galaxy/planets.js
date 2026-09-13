@@ -519,6 +519,7 @@ export class PlanetField {
       aurora: !!derived.aurora && !!derived.look.atmo,
       rotationSpeed: derived.rotationSpeed,
       tilt: derived.tilt,
+      artwork: canvas, // kept for the card and the wallpaper export
     };
     if (travelFrom) {
       const dur = Math.min(7, 2.2 + travelFrom.distanceTo(position) / 6000);

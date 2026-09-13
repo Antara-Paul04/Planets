@@ -109,6 +109,17 @@ export function createCreator({ onLaunch, onPreview }) {
               placeholder="one line for whoever finds it" />
           </div>
           <p class="msg-count"></p>
+          <div class="gift-row voice-box">
+            <button class="voice-rec btn-ghost" type="button">● record a voice line</button>
+            <button class="voice-play btn-ghost" type="button" hidden>▶ hear it</button>
+            <button class="voice-drop btn-ghost" type="button" hidden title="remove the voice line">×</button>
+          </div>
+          <p class="voice-status"></p>
+          <div class="gift-row seal-row">
+            <label class="seal-label">open it on <input class="seal-date" type="date" /></label>
+            <button class="seal-clear btn-ghost" type="button" hidden title="open from birth">×</button>
+          </div>
+          <p class="seal-status"></p>
         </div>
         <div class="step-nav">
           <button class="btn-ghost btn-to-draw">back to drawing</button>
@@ -187,6 +198,115 @@ export function createCreator({ onLaunch, onPreview }) {
     msgCount.textContent = n ? `${n} / ${MAX_MESSAGE_CHARS}` : '';
   });
   const currentMessage = () => msgInput.value.replace(/\s+/g, ' ').trim().slice(0, MAX_MESSAGE_CHARS) || null;
+
+  // ---------- a voice line: up to ten seconds, recorded here, sent as a blob ----------
+  const VOICE_MAX_S = 10;
+  const recBtn = $('.voice-rec');
+  const voicePlayBtn = $('.voice-play');
+  const voiceDropBtn = $('.voice-drop');
+  const voiceStatus = $('.voice-status');
+  let voice = null;        // data URL once recorded
+  let voiceSeconds = 0;
+  let recorder = null;
+  let recStream = null;
+  let recTimer = null;
+  let recStart = 0;
+  let voiceAudio = null;
+
+  const pickMime = () => ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/webm']
+    .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+  const fmtSecs = (s) => `0:${String(Math.min(VOICE_MAX_S, Math.round(s))).padStart(2, '0')}`;
+
+  function stopRecording() {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    clearInterval(recTimer);
+  }
+  async function startRecording() {
+    if (!navigator.mediaDevices || !window.MediaRecorder) { voiceStatus.textContent = 'this browser can’t record here'; return; }
+    try {
+      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      voiceStatus.textContent = 'microphone not allowed'; return;
+    }
+    const chunks = [];
+    const mime = pickMime();
+    recorder = new MediaRecorder(recStream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      recStream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
+      voiceSeconds = Math.min(VOICE_MAX_S, (performance.now() - recStart) / 1000);
+      const fr = new FileReader();
+      fr.onload = () => {
+        voice = String(fr.result);
+        if (voice.length > 560 * 1024) { voice = null; voiceStatus.textContent = 'that recording is too large · try a shorter one'; setRecUI('idle'); return; }
+        setRecUI('done');
+      };
+      fr.readAsDataURL(blob);
+    };
+    recStart = performance.now();
+    recorder.start(250);
+    setRecUI('recording');
+    recTimer = setInterval(() => {
+      const s = (performance.now() - recStart) / 1000;
+      recBtn.textContent = `■ stop · ${fmtSecs(s)} / 0:${VOICE_MAX_S}`;
+      if (s >= VOICE_MAX_S) stopRecording();
+    }, 100);
+  }
+  function setRecUI(state) {
+    recBtn.dataset.state = state;
+    if (state === 'idle') {
+      recBtn.textContent = '● record a voice line';
+      voicePlayBtn.hidden = true; voiceDropBtn.hidden = true;
+      voiceStatus.textContent = '';
+    } else if (state === 'recording') {
+      voiceStatus.textContent = 'recording · ten seconds at most';
+      voicePlayBtn.hidden = true; voiceDropBtn.hidden = true;
+    } else if (state === 'done') {
+      recBtn.textContent = '● record again';
+      voicePlayBtn.hidden = false; voiceDropBtn.hidden = false;
+      voiceStatus.textContent = `a ${fmtSecs(voiceSeconds)} voice line will ride on the planet`;
+    }
+  }
+  recBtn.addEventListener('click', () => {
+    if (recBtn.dataset.state === 'recording') stopRecording(); else startRecording();
+  });
+  voicePlayBtn.addEventListener('click', () => {
+    if (!voice) return;
+    if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; voicePlayBtn.textContent = '▶ hear it'; return; }
+    voiceAudio = new Audio(voice);
+    voicePlayBtn.textContent = '■ stop';
+    voiceAudio.onended = () => { voiceAudio = null; voicePlayBtn.textContent = '▶ hear it'; };
+    voiceAudio.play().catch(() => { voiceAudio = null; voicePlayBtn.textContent = '▶ hear it'; });
+  });
+  voiceDropBtn.addEventListener('click', () => { voice = null; if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; } setRecUI('idle'); });
+
+  // ---------- sealed until a day the maker picks (opens at local midnight) ----------
+  const sealDate = $('.seal-date');
+  const sealClear = $('.seal-clear');
+  const sealStatus = $('.seal-status');
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  {
+    const min = new Date(); min.setDate(min.getDate() + 1);
+    const max = new Date(); max.setDate(max.getDate() + 399);
+    sealDate.min = isoDay(min); sealDate.max = isoDay(max);
+  }
+  function currentRevealAt() {
+    if (!sealDate.value) return null;
+    const [y, m, d] = sealDate.value.split('-').map(Number);
+    const at = new Date(y, m - 1, d, 0, 0, 0, 0); // local midnight
+    return at.getTime() > Date.now() + 60000 ? at.toISOString() : null;
+  }
+  function refreshSeal() {
+    const at = currentRevealAt();
+    sealClear.hidden = !sealDate.value;
+    if (!sealDate.value) { sealStatus.textContent = ''; return; }
+    if (!at) { sealStatus.textContent = 'pick a day after today'; return; }
+    sealStatus.textContent = `sealed until ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })} · they’ll see the planet, not what it carries`;
+  }
+  sealDate.addEventListener('input', refreshSeal);
+  sealDate.addEventListener('change', refreshSeal);
+  sealClear.addEventListener('click', () => { sealDate.value = ''; refreshSeal(); });
 
   const painter = new Painter(CW, CH);
 
@@ -487,11 +607,11 @@ export function createCreator({ onLaunch, onPreview }) {
     if (which === 'preview') {
       $('.preview-name').textContent = nameInput.value.trim() || 'a planet with no name yet';
       const msg = currentMessage();
-      $('.step-preview .creator-sub').textContent = song && msg
-        ? 'it carries a song and your line · drag to turn it over'
-        : song ? 'it carries a song · drag to turn it over'
-          : msg ? 'it carries your line · drag to turn it over'
-            : 'drag to turn it over in your hands';
+      const carried = [song && 'a song', msg && 'your line', voice && 'your voice'].filter(Boolean);
+      const sealedAt = currentRevealAt();
+      $('.step-preview .creator-sub').textContent = carried.length
+        ? `it carries ${carried.join(' and ')}${sealedAt ? `, sealed until ${new Date(sealedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}` : ''} · drag to turn it over`
+        : 'drag to turn it over in your hands';
       buildPreviewPlanet();
       startPreview();
       if (onPreview) onPreview();
@@ -536,7 +656,7 @@ export function createCreator({ onLaunch, onPreview }) {
     launchBtn.textContent = 'launching…';
     statusEl.textContent = '';
 
-    const result = await onLaunch({ name, canvas: copy, derived, song, message: currentMessage() });
+    const result = await onLaunch({ name, canvas: copy, derived, song, message: currentMessage(), voice, revealAt: currentRevealAt() });
 
     launching = false;
     launchBtn.disabled = false;
@@ -557,7 +677,8 @@ export function createCreator({ onLaunch, onPreview }) {
     if (result && result.failed) {
       statusEl.textContent = result.unavailable
         ? 'the universe is temporarily unavailable.'
-        : "the universe didn't answer. try again in a moment.";
+        : result.badVoice ? 'the voice line didn’t go through. remove it or record again.'
+          : "the universe didn't answer. try again in a moment.";
       return;
     }
 
@@ -573,6 +694,8 @@ export function createCreator({ onLaunch, onPreview }) {
     songStart.value = '';
     msgInput.value = '';
     msgCount.textContent = '';
+    voice = null; setRecUI('idle');
+    sealDate.value = ''; refreshSeal();
     refreshSong();
     statusEl.textContent = '';
   });

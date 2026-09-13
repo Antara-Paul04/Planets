@@ -2,9 +2,11 @@ import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { reporterIp } from '../lib/reports/ip.js';
 import { hashReporterIp } from '../lib/reports/hash.js';
 import { addReport } from '../lib/reports/store.js';
+import { sanitizeReason, notifyOwner } from '../lib/reports/notify.js';
+import { slugForName } from '../lib/song.js';
 
 // POST /api/report
-// body: { planetId: uuid }
+// body: { planetId: uuid, reason?: string (<= 200 chars) }
 //
 // The complete moderation rule: three DIFFERENT IP addresses report a
 // planet -> the planet becomes HIDDEN. One report per IP per planet.
@@ -34,6 +36,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  const reason = sanitizeReason(req.body && req.body.reason);
   const ip = reporterIp(req); // server-derived; body.ip is never read
   const ipHash = hashReporterIp(ip);
 
@@ -45,6 +48,7 @@ export default async function handler(req, res) {
   }
   try {
     let hidden = false;
+    let added = false;
     if (db) {
       const out = await db.rpcReportPlanet(planetId, ipHash);
       if (!out.ok && isProductionStrict()) {
@@ -53,12 +57,31 @@ export default async function handler(req, res) {
       }
       if (out.ok && Array.isArray(out.json) && out.json[0]) {
         hidden = !!out.json[0].hidden;
+        added = !!out.json[0].added;
       }
+      if (added && reason) await db.setReportReason(planetId, ipHash, reason).catch(() => {});
     } else {
-      hidden = addReport(planetId, ipHash).hidden;
+      const r = addReport(planetId, ipHash);
+      hidden = r.hidden;
+      added = r.added !== false;
     }
-    console.log(JSON.stringify({ at: 'report', ts: new Date().toISOString(), hidden }));
+    console.log(JSON.stringify({ at: 'report', ts: new Date().toISOString(), hidden, reason: !!reason }));
+    // acknowledge first; the owner's notification must never slow or fail a report
     res.status(200).json({ ok: true, hidden });
+
+    // tell the project owner (a repeat report from the same network is not re-sent)
+    if (added && db) {
+      try {
+        const [found, count] = await Promise.all([db.findPlanetById(planetId), db.countDistinctReporters(planetId)]);
+        const planet = found.ok && Array.isArray(found.json) ? found.json[0] : null;
+        if (planet) {
+          const distinct = count.ok && Array.isArray(count.json) ? new Set(count.json.map((r) => r.reporter_ip_hash)).size : null;
+          const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+          const origin = `${proto}://${req.headers['x-forwarded-host'] || req.headers.host || 'go-astray.vercel.app'}`;
+          await notifyOwner({ planet, reason, distinct, hidden, origin, slug: slugForName(planet.name) });
+        }
+      } catch { /* the report is already recorded */ }
+    }
   } catch {
     if (isProductionStrict()) {
       res.status(503).json({ error: 'universe_unavailable' });

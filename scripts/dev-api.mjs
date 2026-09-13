@@ -19,12 +19,17 @@ import { sanitizeSong, sanitizeMessage, nameFromSlug } from '../lib/song.js';
 import { capacityForType } from '../lib/capacity.js';
 import { fetchSongTitle } from '../lib/song-meta.js';
 import { renderCard } from '../lib/og-card.js';
+import { decodeVoice } from '../lib/validate-voice.js';
+import { sanitizeRevealAt, sealCargo } from '../lib/reveal.js';
+import { sanitizeReason, composeReport, notifyOwner, verifyModerationSig } from '../lib/reports/notify.js';
+import { slugForName } from '../lib/song.js';
 
 const PORT = Number(process.env.PORT || 3000);
 const DIR = join(process.cwd(), '.dev-universe');
 const STATE = join(DIR, 'state.json');
 const LIMIT = process.env.DEV_LIMIT === '1';
 mkdirSync(join(DIR, 'art'), { recursive: true });
+mkdirSync(join(DIR, 'voice'), { recursive: true });
 
 const state = existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : { planets: [], stars: {}, reports: {} };
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 1));
@@ -50,7 +55,7 @@ const publicPlanet = (p) => ({
   orbit: p.orbit,
   satelliteType: p.satelliteType, satelliteConfig: p.satelliteConfig,
   surfaceType: p.surfaceType, vibe: p.vibe, scale: p.scale, rotationSpeed: p.rotationSpeed, tilt: p.tilt,
-  song: p.song, message: p.message,
+  ...sealCargo({ song: p.song, message: p.message, voiceUrl: p.voiceFile ? `/api/dev-voice/${p.voiceFile}` : null, revealAt: p.revealAt || null }),
 });
 
 async function createPlanet(b, ip) {
@@ -86,6 +91,11 @@ async function createPlanet(b, ip) {
   writeFileSync(join(DIR, 'art', artworkFile), art.buffer);
   const song = sanitizeSong(b.song);
   if (song) song.title = await fetchSongTitle(song);
+  const voice = decodeVoice(b.voice);
+  if (!voice.ok) return [400, { error: 'invalid_voice', detail: voice.error }];
+  let voiceFile = null;
+  if (!voice.empty) { voiceFile = `${b.clientRef}.${voice.ext}`; writeFileSync(join(DIR, 'voice', voiceFile), voice.buffer); }
+  const revealAt = sanitizeRevealAt(b.revealAt);
   const planet = {
     id: randomUUID(), clientRef: b.clientRef, name, nameKey: key, createdAt: new Date().toISOString(), day: today(), creator: ip,
     starId: star.id, orbit, extent, artworkFile,
@@ -94,7 +104,7 @@ async function createPlanet(b, ip) {
     surfaceType: typeof b.surfaceType === 'string' ? b.surfaceType.slice(0, 16) : null,
     vibe: typeof b.vibe === 'string' ? b.vibe.slice(0, 16) : null,
     scale: Number(b.scale) || 2.4, rotationSpeed: Number(b.rotationSpeed) || 0.12, tilt: Number(b.tilt) || 0.25,
-    song, message: sanitizeMessage(b.message), hidden: false,
+    song, message: sanitizeMessage(b.message), hidden: false, voiceFile, revealAt,
   };
   state.planets.push(planet);
   save();
@@ -107,6 +117,7 @@ function assignment(p, dedup) {
   return {
     id: p.id, createdAt: p.createdAt, artworkUrl: `/api/dev-art/${p.artworkFile}`,
     star: { ...s, isNew: false }, orbit: p.orbit, deduplicated: dedup,
+    revealAt: p.revealAt || null, voiceUrl: p.voiceFile ? `/api/dev-voice/${p.voiceFile}` : null,
   };
 }
 
@@ -133,8 +144,8 @@ const server = http.createServer(async (req, res) => {
       const keys = [normalizeNameKey(raw), normalizeNameKey(nameFromSlug(raw))];
       const p = state.planets.find((x) => !x.hidden && keys.includes(x.nameKey));
       if (!p) return json(res, 404, { error: 'not_found' });
-      const { id, name, createdAt, starId, artworkUrl, song, message } = publicPlanet(p);
-      return json(res, 200, { planet: { id, name, createdAt, starId, artworkUrl, song, message } });
+      const { id, name, createdAt, starId, artworkUrl, song, message, voiceUrl, sealed, revealAt, hasMessage, hasSong, hasVoice } = publicPlanet(p);
+      return json(res, 200, { planet: { id, name, createdAt, starId, artworkUrl, song, message, voiceUrl, sealed, revealAt, hasMessage, hasSong, hasVoice } });
     }
     if (url.pathname === '/api/og' && req.method === 'GET') {
       const raw = url.searchParams.get('name') || '';
@@ -146,15 +157,43 @@ const server = http.createServer(async (req, res) => {
       return res.end(png);
     }
     if (url.pathname === '/api/report' && req.method === 'POST') {
-      const { planetId } = await readBody(req);
+      const { planetId, reason: rawReason } = await readBody(req);
       const p = state.planets.find((x) => x.id === planetId);
       if (!p) return json(res, 404, { ok: false, error: 'not_found' });
+      const reason = sanitizeReason(rawReason);
       const set = new Set(state.reports[planetId] || []);
+      const added = !set.has(ip);
       set.add(ip);
       state.reports[planetId] = [...set];
       if (set.size >= 3) p.hidden = true;
       save();
-      return json(res, 200, { ok: true, hidden: !!p.hidden });
+      json(res, 200, { ok: true, hidden: !!p.hidden });
+      if (added) {
+        const report = { planet: { id: p.id, name: p.name }, reason, distinct: set.size, hidden: !!p.hidden, origin: 'http://localhost:5173', slug: slugForName(p.name) };
+        const out = await notifyOwner(report); // real webhook/email if configured in the shell
+        console.log(`\n${composeReport(report).text}\n(owner notified via: ${out.delivered.join(', ') || 'nothing configured — printed here instead'})\n`);
+      }
+      return;
+    }
+    if (url.pathname === '/api/moderate' && req.method === 'GET') {
+      const planetId = url.searchParams.get('planet') || '';
+      const action = url.searchParams.get('action') || '';
+      const sig = url.searchParams.get('sig') || '';
+      const p = state.planets.find((x) => x.id === planetId);
+      if (!verifyModerationSig(planetId, action, sig)) { res.writeHead(403, { 'Content-Type': 'text/plain' }); return res.end('not a valid link'); }
+      if (!p) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('no such planet'); }
+      p.hidden = action === 'hide';
+      save();
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end(`"${p.name}" is now ${p.hidden ? 'hidden' : 'visible'}`);
+    }
+    if (url.pathname.startsWith('/api/dev-voice/') && req.method === 'GET') {
+      const file = url.pathname.slice('/api/dev-voice/'.length).replace(/[^A-Za-z0-9._-]/g, '');
+      const path = join(DIR, 'voice', file);
+      if (!existsSync(path)) { res.writeHead(404); return res.end(); }
+      const type = file.endsWith('.webm') ? 'audio/webm' : file.endsWith('.ogg') ? 'audio/ogg' : 'audio/mp4';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+      return res.end(readFileSync(path));
     }
     if (url.pathname.startsWith('/api/dev-art/') && req.method === 'GET') {
       const file = url.pathname.slice('/api/dev-art/'.length).replace(/[^A-Za-z0-9._-]/g, '');

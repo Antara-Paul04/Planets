@@ -1,4 +1,5 @@
 import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
+import { shapeCargo } from './planet.js';
 
 // GET /api/planets
 // The public universe query: VISIBLE planets only, only the fields the
@@ -38,6 +39,7 @@ export default async function handler(req, res) {
       x: s.position_x, y: s.position_y, z: s.position_z,
       plane_incl: s.plane_incl, plane_node: s.plane_node,
     }));
+    const now = Date.now();
     const planets = out.json.map((p) => ({
       id: p.id,
       name: p.name,
@@ -59,10 +61,7 @@ export default async function handler(req, res) {
       scale: p.scale,
       rotationSpeed: p.rotation_speed,
       tilt: p.tilt,
-      song: p.song_provider && p.song_id
-        ? { provider: p.song_provider, id: p.song_id, start: p.song_start || 0, title: p.song_title || null }
-        : null,
-      message: p.message || null,
+      ...shapeCargo(db, p, now), // message/song/voiceUrl, stripped while sealed
     }));
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120');
     res.status(200).json({ planets, stars });

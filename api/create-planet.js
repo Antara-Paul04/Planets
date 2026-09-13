@@ -4,6 +4,8 @@ import { reporterIp } from '../lib/reports/ip.js';
 import { hashCreatorIp } from '../lib/reports/hash.js';
 import { sanitizeSong, sanitizeMessage } from '../lib/song.js';
 import { fetchSongTitle } from '../lib/song-meta.js';
+import { decodeVoice } from '../lib/validate-voice.js';
+import { sanitizeRevealAt } from '../lib/reveal.js';
 
 // POST /api/create-planet
 // body: {
@@ -91,6 +93,12 @@ export default async function handler(req, res) {
   planet.song_start = song ? song.start : 0;
   planet.song_title = song ? await fetchSongTitle(song).catch(() => null) : null;
   planet.message = sanitizeMessage(b.message);
+  // sealed until a moment the maker picked (null = open from birth)
+  const revealAt = sanitizeRevealAt(b.revealAt);
+  // an optional voice line; a bad one is rejected outright (the maker meant to send it)
+  const voice = decodeVoice(b.voice);
+  if (!voice.ok) { res.status(400).json({ error: 'invalid_voice', detail: voice.error }); return; }
+  const voicePath = voice.empty ? null : `voices/${b.clientRef}.${voice.ext}`;
 
   // one planet per network: the creator identity is a keyed HMAC of the
   // request IP (server-derived, never from the body); the raw IP is not stored.
@@ -120,13 +128,23 @@ export default async function handler(req, res) {
         res.status(500).json({ error: 'artwork_upload_failed' });
         return;
       }
+      // the seal and the voice ride an UPDATE right after the insert
+      // (migration 006); a failed voice upload leaves the planet without one
+      let storedVoice = null;
+      if (voicePath) {
+        const vu = await db.uploadVoice(voicePath, voice.buffer, voice.contentType);
+        if (vu.ok) storedVoice = voicePath;
+      }
+      if (revealAt || storedVoice) {
+        await db.setPlanetExtras(a.planet_id, { reveal_at: revealAt, voice_path: storedVoice });
+      }
     }
 
     console.log(JSON.stringify({
       at: 'create-planet', ts: new Date().toISOString(),
       id: a.planet_id, starId: a.star_id, newStar: a.star_is_new, dedup: a.deduplicated,
     }));
-    res.status(200).json({ ok: true, planet: shape(db, a, artworkPath) });
+    res.status(200).json({ ok: true, planet: { ...shape(db, a, artworkPath), revealAt, voiceUrl: voicePath ? db.publicVoiceUrl(voicePath) : null } });
   } catch {
     if (isProductionStrict()) { res.status(503).json({ error: 'universe_unavailable' }); return; }
     res.status(500).json({ error: 'create_failed' });

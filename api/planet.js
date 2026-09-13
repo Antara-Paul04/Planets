@@ -1,6 +1,7 @@
 import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { normalizeNameKey } from '../lib/name.js';
 import { nameFromSlug } from '../lib/song.js';
+import { sealCargo } from '../lib/reveal.js';
 
 // GET /api/planet?name=<name or slug>
 // The exact lookup behind /p/<name>: ONE visible planet by normalized name.
@@ -8,17 +9,26 @@ import { nameFromSlug } from '../lib/song.js';
 // then with hyphens read as spaces. Returns the public shape only: name,
 // birth date, star, artwork, song, message. 404 when there is no such world.
 
-export function shapePlanet(db, p) {
+// the cargo a planet carries, sealed until reveal_at when the maker set one
+export function shapeCargo(db, p, now = Date.now()) {
+  return sealCargo({
+    song: p.song_provider && p.song_id
+      ? { provider: p.song_provider, id: p.song_id, start: p.song_start || 0, title: p.song_title || null }
+      : null,
+    message: p.message || null,
+    voiceUrl: p.voice_path ? db.publicVoiceUrl(p.voice_path) : null,
+    revealAt: p.reveal_at || null,
+  }, now);
+}
+
+export function shapePlanet(db, p, now = Date.now()) {
   return {
     id: p.id,
     name: p.name,
     createdAt: p.created_at,
     starId: p.star_id,
     artworkUrl: p.artwork_path ? db.publicArtworkUrl(p.artwork_path) : null,
-    song: p.song_provider && p.song_id
-      ? { provider: p.song_provider, id: p.song_id, start: p.song_start || 0, title: p.song_title || null }
-      : null,
-    message: p.message || null,
+    ...shapeCargo(db, p, now),
   };
 }
 

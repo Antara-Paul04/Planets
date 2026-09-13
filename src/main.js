@@ -15,6 +15,8 @@ import { createPlanetCard } from './ui/planetCard.js';
 import { createArrival } from './ui/arrival.js';
 import { normalizeNameKey } from '../lib/name.js';
 import { nameFromSlug, slugForName } from '../lib/song.js';
+import { isSealed } from '../lib/reveal.js';
+import { saveWallpaper } from './wallpaper.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
 import { Soundscape } from './audio.js';
 
@@ -91,6 +93,8 @@ function saveMyPlanet(spec, canvas, derived) {
       solarSystemId: spec.solarSystemId,
       song: spec.song || null,
       message: spec.message || null,
+      voiceUrl: spec.voiceUrl || null,
+      revealAt: spec.revealAt || null,
       derived: {
         look: derived.look,
         type: derived.type,
@@ -173,6 +177,9 @@ function restoreMyPlanet() {
     if (saved.remoteId) myPlanet.remoteId = saved.remoteId;
     myPlanet.song = saved.song || null;
     myPlanet.message = saved.message || null;
+    myPlanet.voiceUrl = saved.voiceUrl || null;
+    myPlanet.revealAt = saved.revealAt || null;
+    myPlanet.mine = true; // the maker always sees their own cargo, sealed or not
     findBtn.classList.remove('gone');
   };
   img.src = saved.dataURL;
@@ -200,11 +207,13 @@ const audio = new Soundscape();
 // ---- launch ----
 const toast = document.getElementById('toast');
 let toastTimer = null;
-const planetCard = createPlanetCard();
+const planetCard = createPlanetCard({
+  onWallpaper: (cur) => saveWallpaper({ name: cur.name, message: cur.message, song: cur.song, artwork: cur.artwork, sealed: isSealed(cur.revealAt), revealAt: cur.revealAt }, { slug: slugForName(cur.name) }),
+});
 
 const creator = createCreator({
   onPreview: () => audio.tick(),
-  async onLaunch({ name, canvas, derived, song = null, message = null }) {
+  async onLaunch({ name, canvas, derived, song = null, message = null, voice = null, revealAt = null }) {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const start = camera.position.clone().addScaledVector(dir, 14);
@@ -221,7 +230,7 @@ const creator = createCreator({
       }));
 
     const clientRef = crypto.randomUUID();
-    const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived, song, message });
+    const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived, song, message, voice, revealAt });
     if (remote.nameTaken) return { nameTaken: true }; // the creator asks for another name
     if (remote.planetLimitReached) return { planetLimitReached: true }; // one planet per network
     if (remote.unavailable) {
@@ -229,7 +238,7 @@ const creator = createCreator({
       return { failed: true, unavailable: true }; // nothing spawns, drawing kept
     }
     if (remote.error) {
-      return { failed: true }; // creator shows a gentle message, drawing kept
+      return { failed: true, badVoice: !!remote.badVoice }; // creator shows a gentle message, drawing kept
     }
     universeStatus.classList.remove('show'); // the universe answered
 
@@ -267,13 +276,16 @@ const creator = createCreator({
     if (remoteId) myPlanet.remoteId = remoteId;
     myPlanet.song = song || null;
     myPlanet.message = message || null;
+    myPlanet.voiceUrl = (remote.ok && remote.planet.voiceUrl) || (voice ? voice : null); // own recording plays locally in dev
+    myPlanet.revealAt = (remote.ok && remote.planet.revealAt) || revealAt || null;
+    myPlanet.mine = true;
     saveMyPlanet(myPlanet, canvas, derived);
     findBtn.classList.remove('gone');
     refreshCreationGate(); // this browser has planted its one world
     audio.birth(); // something has just come into existence
 
     // a keepsake to screenshot/share, once the creator overlay has closed
-    setTimeout(() => planetCard.show({ name, createdAt: createdAt || Date.now(), artworkCanvas: canvas, message, song }), 420);
+    setTimeout(() => planetCard.show({ name, createdAt: createdAt || Date.now(), artworkCanvas: canvas, message, song, voiceUrl: myPlanet.voiceUrl, revealAt: myPlanet.revealAt }), 420);
 
     // let it sail away, then whisper where it went
     clearTimeout(toastTimer);
@@ -378,7 +390,28 @@ const arrival = createArrival({
     creator.open();
   },
   onSongState: (state) => audio.duck(state === 'playing' || state === 'loading'),
+  onReport: (planet, reason) => reportPlanet(planet, reason),
+  onWallpaper: (planet) => saveWallpaper({
+    name: planet.name, message: planet.message, song: planet.song, artwork: planet.artwork,
+    sealed: !!planet.sealed, revealAt: planet.revealAt,
+  }, { slug: slugForName(planet.name) }),
+  // a seal has just lapsed while the visitor waited: fetch the cargo and open it
+  onReveal: async (planet) => {
+    const got = await fetchPlanetByName(planet.name, { fresh: true });
+    if (!got.planet) return false;
+    applyCargo(planet, got.planet);
+    return !planet.sealed;
+  },
 });
+// what a planet carries, as the server allows us to see it right now
+function applyCargo(spec, row) {
+  spec.song = row.song || null;
+  spec.message = row.message || null;
+  spec.voiceUrl = row.voiceUrl || null;
+  spec.revealAt = row.revealAt || null;
+  spec.sealed = !!row.sealed;
+  spec.hasMessage = !!row.hasMessage; spec.hasSong = !!row.hasSong; spec.hasVoice = !!row.hasVoice;
+}
 focus.liftFor = (planet) => arriveMode === 'link' || !!(planet && (planet.song || planet.message));
 focus.onArrive = (planet) => {
   arrival.show(planet, { mode: arriveMode });
@@ -573,8 +606,7 @@ fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }
         createdAt: Date.parse(row.createdAt),
       });
       spec.remoteId = row.id;
-      spec.song = row.song || null;
-      spec.message = row.message || null;
+      applyCargo(spec, row);
       if (orbit && star) {
         claimOrbitRadius(star, orbit.radius, orbitExtentOf(spec.scale, spec.look));
       }
@@ -588,8 +620,11 @@ fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }
 function adoptMineRow(row) {
   const apply = () => {
     if (!myPlanet) return false;
-    if (row.song) myPlanet.song = row.song;
+    // never let the sealed (stripped) public row erase the maker's own copy
+    if (row.song) myPlanet.song = { ...(myPlanet.song || {}), ...row.song };
     if (row.message && !myPlanet.message) myPlanet.message = row.message;
+    if (row.voiceUrl) myPlanet.voiceUrl = row.voiceUrl;
+    if (row.revealAt) myPlanet.revealAt = row.revealAt;
     return true;
   };
   if (apply()) return;
@@ -642,34 +677,36 @@ async function landAt({ slug, keys }) {
 // dev-only diagnostic (fps / draw calls / tris) — never shown to real visitors
 const perf = import.meta.env.DEV ? createPerfPanel({ renderer, field }) : { tick() {} };
 
-// reporting: three DIFFERENT people reporting a planet removes it.
+// reporting: three DIFFERENT networks reporting a planet hide it, and the
+// project owner hears about every report with one-click links to act sooner.
 // The server derives the reporter identity; nothing personal is collected.
-document.querySelector('#planet-label .label-report').addEventListener('click', async () => {
-  const planet = focus.current;
-  if (!planet) return;
+async function reportPlanet(planet, reason = null) {
+  if (!planet) return { ok: false };
   clearTimeout(toastTimer);
+  let out = { ok: true, hidden: false };
   if (planet.remoteId) {
     // a report only reads as successful once it is actually recorded
-    const out = await reportPlanetRemote(planet.remoteId);
-    if (out && out.ok) {
-      toast.querySelector('.toast-name').textContent = 'reported';
-      toast.querySelector('.toast-sub').textContent = 'thanks';
-      if (out.hidden) {
-        focus.clear();
-        field.removePlanet(planet); // quietly gone — no celebration
-      }
-    } else {
-      toast.querySelector('.toast-name').textContent = 'the universe is temporarily unavailable';
-      toast.querySelector('.toast-sub').textContent = 'try again in a moment';
-      if (out && out.unavailable) universeStatus.classList.add('show');
+    out = await reportPlanetRemote(planet.remoteId, reason);
+  }
+  if (out && out.ok) {
+    toast.querySelector('.toast-name').textContent = 'reported';
+    toast.querySelector('.toast-sub').textContent = 'thanks · someone will look';
+    if (out.hidden) {
+      focus.clear();
+      field.removePlanet(planet); // quietly gone — no celebration
     }
   } else {
-    // procedural worlds have nothing to record — the quiet ack is honest
-    toast.querySelector('.toast-name').textContent = 'reported';
-    toast.querySelector('.toast-sub').textContent = 'thanks';
+    toast.querySelector('.toast-name').textContent = 'the universe is temporarily unavailable';
+    toast.querySelector('.toast-sub').textContent = 'try again in a moment';
+    if (out && out.unavailable) universeStatus.classList.add('show');
   }
   toast.classList.add('show');
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+  return out;
+}
+// the small "report" under a planet's name opens the panel with the reasons out
+document.querySelector('#planet-label .label-report').addEventListener('click', () => {
+  if (focus.current) arrival.openReport(focus.current);
 });
 
 setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);
@@ -703,4 +740,4 @@ renderer.setAnimationLoop(() => {
 });
 
 // debug handle for testing in the console (harmless in a prototype)
-window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info, search, planetCard, arrival, landAt };
+window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info, search, planetCard, arrival, landAt, applyCargo };
