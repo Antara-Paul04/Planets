@@ -2,6 +2,8 @@ import { getSupabase, isProductionStrict } from '../lib/db/supabase.js';
 import { decodeArtwork } from '../lib/validate-image.js';
 import { reporterIp } from '../lib/reports/ip.js';
 import { hashCreatorIp } from '../lib/reports/hash.js';
+import { sanitizeSong, sanitizeMessage } from '../lib/song.js';
+import { fetchSongTitle } from '../lib/song-meta.js';
 
 // POST /api/create-planet
 // body: {
@@ -81,6 +83,14 @@ export default async function handler(req, res) {
     rotation_speed: num(b.rotationSpeed) ?? 0.12,
     tilt: num(b.tilt) ?? 0.25,
   };
+  // a planet for someone: an optional song (provider + bare id + start second,
+  // never the pasted URL) and one line. Both validated here; both optional.
+  const song = sanitizeSong(b.song);
+  planet.song_provider = song ? song.provider : null;
+  planet.song_id = song ? song.id : null;
+  planet.song_start = song ? song.start : 0;
+  planet.song_title = song ? await fetchSongTitle(song).catch(() => null) : null;
+  planet.message = sanitizeMessage(b.message);
 
   // one planet per network: the creator identity is a keyed HMAC of the
   // request IP (server-derived, never from the body); the raw IP is not stored.

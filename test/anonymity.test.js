@@ -103,7 +103,45 @@ test('the planet record carries only world-state fields, nothing identifying', a
   const sent = JSON.parse(rpc.options.body);
   // the creator hash is a SEPARATE top-level RPC arg, never mixed into the planet
   const planetKeys = Object.keys(sent.p_planet).sort();
-  assert.deepEqual(planetKeys, ['artwork_path', 'name', 'rotation_speed', 'satellite_config', 'satellite_type', 'scale', 'surface_type', 'tilt', 'vibe'].sort());
+  // song_provider/song_id/song_start/message are public world content the
+  // maker chose to put on the planet (migration 005) -- never identity.
+  assert.deepEqual(planetKeys, ['artwork_path', 'name', 'rotation_speed', 'satellite_config', 'satellite_type', 'scale', 'surface_type', 'tilt', 'vibe',
+    'song_provider', 'song_id', 'song_start', 'song_title', 'message'].sort());
+});
+
+test('a song reaches the database as provider + bare id only; the pasted URL and its tracking params never do', async () => {
+  supaEnv();
+  const calls = [];
+  stub(calls);
+  const res = mockRes();
+  const b = body('77777777-7777-4777-8777-777777777777');
+  b.song = { provider: 'spotify', id: '4uLU6hMCjMI75M1A2tKUQC', start: 42, url: 'https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC?si=TRACKING' };
+  b.message = '  for you,  always  ';
+  await createHandler({ method: 'POST', headers: { 'x-real-ip': '203.0.113.1' }, body: b }, res);
+  const rpc = calls.find((c) => c.url.includes('rpc/assign_planet'));
+  const raw = rpc.options.body;
+  const sent = JSON.parse(raw).p_planet;
+  assert.equal(sent.song_provider, 'spotify');
+  assert.equal(sent.song_id, '4uLU6hMCjMI75M1A2tKUQC');
+  assert.equal(sent.song_start, 42);
+  assert.equal(sent.message, 'for you, always');
+  assert.equal(/si=TRACKING|open\.spotify\.com/.test(raw), false, 'the pasted URL never leaves the server handler');
+});
+
+test('a bad song shape is dropped, not stored, and never rejects the planet', async () => {
+  supaEnv();
+  const calls = [];
+  stub(calls);
+  const res = mockRes();
+  const b = body('88888888-8888-4888-8888-888888888888');
+  b.song = { provider: 'soundcloud', id: 'x' };
+  b.message = 'x'.repeat(500);
+  await createHandler({ method: 'POST', headers: { 'x-real-ip': '203.0.113.1' }, body: b }, res);
+  const sent = JSON.parse(calls.find((c) => c.url.includes('rpc/assign_planet')).options.body).p_planet;
+  assert.equal(sent.song_provider, null);
+  assert.equal(sent.song_id, null);
+  assert.equal(sent.message.length, 80);
+  assert.equal(res.statusCode, 200);
 });
 
 // -------- creator identity is separate from the reporter identity --------

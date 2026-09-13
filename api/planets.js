@@ -59,6 +59,10 @@ export default async function handler(req, res) {
       scale: p.scale,
       rotationSpeed: p.rotation_speed,
       tilt: p.tilt,
+      song: p.song_provider && p.song_id
+        ? { provider: p.song_provider, id: p.song_id, start: p.song_start || 0, title: p.song_title || null }
+        : null,
+      message: p.message || null,
     }));
     res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120');
     res.status(200).json({ planets, stars });

@@ -37,6 +37,7 @@ No feed. No likes. No profiles. **Just planets.**
 - 🌈 **make it yours** — pick a surface and a mood. Rings? Moons? *The universe decides.*
 - 🚀 **launch** — your world glides out to orbit a real star; a quiet line whispers where it went.
 - 🔎 **discover** — search by name (every one is unique) and travel there. Love it? Share its collectible card.
+- 💌 **make it for someone** — paste a Spotify or YouTube link and leave one line. Every planet has its own address, `/p/<name>`; open it and you're flown straight there, the line appears, and their song plays (audio only) when you press play.
 
 ## 🌌 what makes it feel alive
 
@@ -50,20 +51,43 @@ No feed. No likes. No profiles. **Just planets.**
 
 no accounts · no logins · no tracking · no cookies — just two quiet, fair rules:
 
-- 🪐 **one planet per network** — a public IP can make one planet, enforced in the database via a one-way hash of the IP (the raw IP is never stored). it's per-*network*, not per-person.
+- 🪐 **one planet per network per day** — a public IP can make one planet a day, enforced in the database via a one-way hash of the IP (the raw IP is never stored). it's per-*network*, not per-person, and tomorrow you can make another.
 - 🚩 **community moderation** — a planet reported by **3 different networks** is hidden; reporter identities are one-way hashes, and a creator never learns who reported.
 
 → the full, plain-English story lives in [`PRIVACY.md`](PRIVACY.md).
+
+## 💌 planets for someone
+
+A planet can carry a **song** (a Spotify track or a YouTube video) and **one line** (80 characters).
+Its address is `https://go-astray.vercel.app/p/<name>`; the link unfurls as a card, the planet as a
+lit coin with its name, line and song (`api/og.js` renders a 1200x630 PNG with `@vercel/og`;
+`api/p.js` injects the Open Graph tags into the built app for crawlers), and opening it flies the
+visitor across the void to that planet, where the line appears with a play control.
+
+- **audio only.** The provider's player exists for the sound and is never shown; the panel has its
+  own play/pause and shows the song's title, which the server fetched once at creation through the
+  providers' public oEmbed endpoints (`lib/song-meta.js`).
+- **nothing loads until play.** No Spotify or YouTube byte reaches the visitor's browser until they
+  press play on that planet; leaving the planet tears the player down.
+- **only the bare id is stored** (`song_provider`, `song_id`, `song_start`, `song_title`), never the
+  pasted URL or its tracking parameters. `lib/song.js` is the one parser, used by the browser for
+  live validation and by the server as the only validation that counts.
+- Spotify plays the full track only for visitors signed into Spotify in that browser, a 30-second
+  preview for everyone else. YouTube plays the whole thing for anyone. The creator says so.
+- Migration `005_gifts_and_daily_limit.sql` adds the columns and moves the creation limit to
+  one per network per **day** (UTC), so a person can make a planet for a friend today and another
+  for another friend tomorrow.
 
 ## 🚀 run it
 
 ```bash
 npm install
 npm run dev        # front end on :5173, proxies /api → :3000
-vercel dev         # second terminal — serves the /api functions
+npm run dev:api    # second terminal — a local stand-in for the /api functions (no Supabase needed)
+# or: vercel dev    # the real functions, if you have a Supabase project configured
 ```
 
-> ⚠️ `npm run dev` **alone** leaves `/api/*` unanswered — every call 500s and the universe boots empty. Run `vercel dev` alongside it.
+> ⚠️ `npm run dev` **alone** leaves `/api/*` unanswered — every call 500s and the universe boots empty. Run `npm run dev:api` (an in-memory universe persisted to `.dev-universe/`, git-ignored) or `vercel dev` alongside it.
 
 ```bash
 npm test           # 67 tests · node --test

@@ -40,7 +40,9 @@ export class IntroDirector {
   }
 
   // begin the boot: cinematic on first visit, instant reveal otherwise
-  begin() {
+  begin({ skip = false } = {}) {
+    // arriving by a planet's link: the flight to it IS the intro
+    if (skip) { try { localStorage.setItem(SEEN_KEY, '1'); } catch { /* fine */ } this._reveal(); return; }
     if (!firstVisit()) {
       this._reveal();
       return;

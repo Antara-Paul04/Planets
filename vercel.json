@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    { "source": "/p/:slug", "destination": "/api/p?slug=:slug" }
+  ],
+  "functions": {
+    "api/p.js": { "includeFiles": "dist/index.html" }
+  }
+}

@@ -1,7 +1,9 @@
+import { slugForName } from '../../lib/song.js';
+
 // A small collectible card shown after you create a planet: a lit "coin" of
-// your world, its name, its birth date, and a share action. No links, no ids —
-// just a beautiful thing to screenshot and pass around. The discovery loop is:
-// make one -> share the card -> a friend searches its name -> travels to it.
+// your world, its name, its birth date, its own address, and a share action.
+// The loop is: make one -> send its link -> they open it and fly straight to
+// it (the song plays, the line appears) -> they make one back.
 
 export function createPlanetCard() {
   const overlay = document.createElement('div');
@@ -13,8 +15,10 @@ export function createPlanetCard() {
       <div class="card-name"></div>
       <div class="card-born"></div>
       <div class="card-where">somewhere in the universe</div>
+      <div class="card-link"></div>
       <div class="card-actions">
-        <button class="card-share btn-primary">share</button>
+        <button class="card-share btn-primary">send it</button>
+        <button class="card-copy btn-ghost">copy link</button>
         <button class="card-done btn-ghost">done</button>
       </div>
       <div class="card-foot">a planet in the universe</div>
@@ -23,7 +27,11 @@ export function createPlanetCard() {
 
   const coinHolder = overlay.querySelector('.card-coin');
   const shareBtn = overlay.querySelector('.card-share');
+  const copyBtn = overlay.querySelector('.card-copy');
   const doneBtn = overlay.querySelector('.card-done');
+  const linkEl = overlay.querySelector('.card-link');
+
+  const linkFor = (cur) => `${window.location.origin}/p/${slugForName(cur.name)}`;
   let current = null;
 
   function fmtDate(ts) {
@@ -115,7 +123,8 @@ export function createPlanetCard() {
   }
 
   function shareText(cur) {
-    return `"${cur.name}" ✦ a planet I made in the universe. Find it in Planets by searching its name.`;
+    if (cur.message) return `I made you a planet. “${cur.message}”`;
+    return `I made a planet called ${cur.name}. open the link and it flies you there.`;
   }
 
   function flash(msg) {
@@ -128,36 +137,52 @@ export function createPlanetCard() {
   async function share() {
     if (!current) return;
     const text = shareText(current);
-    // 1) native share of the card image (nicest)
+    const url = linkFor(current);
+    // 1) native share: the link is the payload (it unfurls with the card), the
+    //    card image rides along where the platform allows files + a url
     try {
       const img = renderShareImage(current);
       const blob = await new Promise((r) => img.toBlob(r, 'image/png'));
       if (blob && navigator.canShare) {
         const file = new File([blob], `${current.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'planet'}.png`, { type: 'image/png' });
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: current.name, text });
+        if (navigator.canShare({ files: [file], url })) {
+          await navigator.share({ files: [file], title: current.name, text, url });
           return;
         }
       }
-      // 2) native share of text
-      if (navigator.share) { await navigator.share({ title: current.name, text }); return; }
+      if (navigator.share) { await navigator.share({ title: current.name, text, url }); return; }
     } catch (e) {
       if (e && e.name === 'AbortError') return; // user dismissed the share sheet
       // otherwise fall through to copy
     }
-    // 3) clipboard fallback
-    try { await navigator.clipboard.writeText(text); flash('copied ✓'); }
+    // 2) clipboard fallback: the line + the link
+    try { await navigator.clipboard.writeText(`${text}\n${url}`); flash('copied ✓'); }
     catch { flash(current.name); }
   }
 
+  async function copyLink() {
+    if (!current) return;
+    const prev = copyBtn.textContent;
+    try { await navigator.clipboard.writeText(linkFor(current)); copyBtn.textContent = 'copied ✓'; }
+    catch { copyBtn.textContent = 'select it above'; }
+    setTimeout(() => { copyBtn.textContent = prev; }, 1600);
+  }
+
   shareBtn.addEventListener('click', share);
+  copyBtn.addEventListener('click', copyLink);
   doneBtn.addEventListener('click', () => close());
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) close(); });
 
-  function show({ name, createdAt, artworkCanvas }) {
-    current = { name, createdAt, artwork: artworkCanvas };
+  function show({ name, createdAt, artworkCanvas, message = null, song = null }) {
+    current = { name, createdAt, artwork: artworkCanvas, message, song };
     overlay.querySelector('.card-name').textContent = name;
+    linkEl.textContent = linkFor(current).replace(/^https?:\/\//, '');
+    overlay.querySelector('.card-where').textContent = song && message
+      ? 'with a song and a line, waiting for them'
+      : song ? 'with a song, waiting for them'
+        : message ? 'with a line, waiting for them'
+          : 'somewhere in the universe';
     const born = overlay.querySelector('.card-born');
     born.textContent = createdAt ? 'born ' + fmtDate(createdAt) : '';
     coinHolder.innerHTML = '';

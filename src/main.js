@@ -9,16 +9,33 @@ import { AmbientDirector } from './ambient.js';
 import { IntroDirector } from './intro.js';
 import { createInfoSheet } from './ui/info.js';
 import { TravelDirector } from './travel.js';
-import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas, searchPlanets } from './backend/client.js';
+import { createPlanetRemote, fetchSharedPlanets, reportPlanetRemote, loadArtworkCanvas, searchPlanets, fetchPlanetByName } from './backend/client.js';
 import { createSearch } from './ui/search.js';
 import { createPlanetCard } from './ui/planetCard.js';
+import { createArrival } from './ui/arrival.js';
 import { normalizeNameKey } from '../lib/name.js';
+import { nameFromSlug, slugForName } from '../lib/song.js';
 import { assignOrbit, orbitPosition, claimOrbitRadius } from './galaxy/stars.js';
 import { Soundscape } from './audio.js';
 
 const STORAGE_KEY = 'planets.myPlanet.v1';
 
 const { renderer, scene, camera, controls, sun } = createScene(document.getElementById('app'));
+
+// ---- arriving by a planet's link: /p/<slug> (or ?p=<slug> from the OG shell) ----
+// The visitor is flown to that planet as soon as the universe has loaded; the
+// flight itself is the intro. Nothing else about boot changes.
+function parseLanding() {
+  const m = /^\/p\/([^/]+)\/?$/.exec(window.location.pathname);
+  const q = new URLSearchParams(window.location.search).get('p');
+  const slug = m ? m[1] : q;
+  if (!slug) return null;
+  let raw = slug;
+  try { raw = decodeURIComponent(slug); } catch { /* keep as-is */ }
+  const keys = [...new Set([normalizeNameKey(raw), normalizeNameKey(nameFromSlug(slug))].filter(Boolean))];
+  return { slug, keys };
+}
+const landing = parseLanding();
 
 const env = new Environment(scene, camera);
 const field = new PlanetField(scene, env.suns);
@@ -72,6 +89,8 @@ function saveMyPlanet(spec, canvas, derived) {
         ? { starId: spec.orbit.starId, radius: spec.orbit.radius, angle: spec.orbit.angle, speed: spec.orbit.speed, incl: spec.orbit.incl, node: spec.orbit.node || 0 }
         : null,
       solarSystemId: spec.solarSystemId,
+      song: spec.song || null,
+      message: spec.message || null,
       derived: {
         look: derived.look,
         type: derived.type,
@@ -152,6 +171,8 @@ function restoreMyPlanet() {
       createdAt: saved.createdAt,
     });
     if (saved.remoteId) myPlanet.remoteId = saved.remoteId;
+    myPlanet.song = saved.song || null;
+    myPlanet.message = saved.message || null;
     findBtn.classList.remove('gone');
   };
   img.src = saved.dataURL;
@@ -183,7 +204,7 @@ const planetCard = createPlanetCard();
 
 const creator = createCreator({
   onPreview: () => audio.tick(),
-  async onLaunch({ name, canvas, derived }) {
+  async onLaunch({ name, canvas, derived, song = null, message = null }) {
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
     const start = camera.position.clone().addScaledVector(dir, 14);
@@ -200,7 +221,7 @@ const creator = createCreator({
       }));
 
     const clientRef = crypto.randomUUID();
-    const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived });
+    const remote = await createPlanetRemote({ clientRef, name, canvas, candidates, extent, derived, song, message });
     if (remote.nameTaken) return { nameTaken: true }; // the creator asks for another name
     if (remote.planetLimitReached) return { planetLimitReached: true }; // one planet per network
     if (remote.unavailable) {
@@ -244,13 +265,15 @@ const creator = createCreator({
       createdAt,
     });
     if (remoteId) myPlanet.remoteId = remoteId;
+    myPlanet.song = song || null;
+    myPlanet.message = message || null;
     saveMyPlanet(myPlanet, canvas, derived);
     findBtn.classList.remove('gone');
     refreshCreationGate(); // this browser has planted its one world
     audio.birth(); // something has just come into existence
 
     // a keepsake to screenshot/share, once the creator overlay has closed
-    setTimeout(() => planetCard.show({ name, createdAt: createdAt || Date.now(), artworkCanvas: canvas }), 420);
+    setTimeout(() => planetCard.show({ name, createdAt: createdAt || Date.now(), artworkCanvas: canvas, message, song }), 420);
 
     // let it sail away, then whisper where it went
     clearTimeout(toastTimer);
@@ -266,21 +289,22 @@ const creator = createCreator({
   },
 });
 
-// ---- one planet per browser (soft, localStorage-only) ----
-// A gentle "your world is out there" once this browser has a planet. No
-// server enforcement, no IP, no device id — clearing storage or a new browser
-// lets you plant again. It just keeps a single visitor from filling the sky.
+// ---- one planet a day (soft, localStorage-only mirror of the server rule) ----
+// A gentle "your world is out there" once this browser has made a planet
+// TODAY. The server enforces one per network per day; this just saves a
+// visitor from drawing a second one only to be told to come back tomorrow.
 const createBtn = document.getElementById('create-btn');
+const utcDay = (ts) => new Date(ts).toISOString().slice(0, 10);
 function hasOwnPlanet() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-    return !!(saved && saved.v === 1);
+    return !!(saved && saved.v === 1 && saved.createdAt && utcDay(saved.createdAt) === utcDay(Date.now()));
   } catch { return false; }
 }
 function refreshCreationGate() {
   const planted = hasOwnPlanet();
   createBtn.classList.toggle('planted', planted);
-  createBtn.textContent = planted ? 'your world is out there' : 'make a planet';
+  createBtn.textContent = planted ? 'your world is out there · another tomorrow' : 'make a planet';
 }
 refreshCreationGate();
 
@@ -300,7 +324,7 @@ document.getElementById('info-btn').addEventListener('click', () => {
 // ---- idle mode: the UI recedes when you stop (the camera stays put) ----
 let search = null; // the search panel is created after travel exists (below)
 const ambient = new AmbientDirector({
-  isBusy: () => creator.isOpen() || travel.active || (intro && intro.active) || info.isOpen() || (search && search.isOpen()),
+  isBusy: () => creator.isOpen() || travel.active || !!focus.anim || (intro && intro.active) || info.isOpen() || (search && search.isOpen()) || (arrival && arrival.holds()),
   onEnter: () => {
     focus.clear();
     document.body.classList.add('ambient');
@@ -335,6 +359,32 @@ syncAudioUI();
 
 // ---- interstellar travel for "find my planet" ----
 const travel = new TravelDirector({ camera, controls, renderer, scene, env, focus, audio });
+
+// ---- the arrival: what greets you at a planet that carries something ----
+let arriveMode = 'click'; // 'link' for the flight that a planet's address starts
+const arrival = createArrival({
+  onMakeOne: () => {
+    if (travel.active) return;
+    if (hasOwnPlanet()) {
+      clearTimeout(toastTimer);
+      toast.querySelector('.toast-name').textContent = 'one planet a day';
+      toast.querySelector('.toast-sub').textContent = 'yours is out there · make another tomorrow';
+      toast.classList.add('show');
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+      return;
+    }
+    arrival.hide();
+    focus.clear();
+    creator.open();
+  },
+  onSongState: (state) => audio.duck(state === 'playing' || state === 'loading'),
+});
+focus.liftFor = (planet) => arriveMode === 'link' || !!(planet && (planet.song || planet.message));
+focus.onArrive = (planet) => {
+  arrival.show(planet, { mode: arriveMode });
+  arriveMode = 'click';
+};
+focus.onLeave = () => arrival.hide();
 
 // ---- jump to the nearest star: hop to a neighbouring system ----
 // A meaningful interstellar distance so we never bounce between two adjacent
@@ -487,7 +537,7 @@ fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { /* fine */ }
   for (const row of rows) {
-    if (saved && saved.remoteId && row.id === saved.remoteId) continue; // mine spawns locally
+    if (saved && saved.remoteId && row.id === saved.remoteId) { adoptMineRow(row); continue; } // mine spawns locally
     if (!row.artworkUrl) continue;
     const star = env.getStar(row.starId);
     try {
@@ -523,12 +573,71 @@ fetchSharedPlanets().then(async ({ planets: rows, stars: dynStars, unavailable }
         createdAt: Date.parse(row.createdAt),
       });
       spec.remoteId = row.id;
+      spec.song = row.song || null;
+      spec.message = row.message || null;
       if (orbit && star) {
         claimOrbitRadius(star, orbit.radius, orbitExtentOf(spec.scale, spec.look));
       }
     } catch { /* one bad row must not break the universe */ }
   }
-}).catch(() => { /* degraded: procedural universe still works */ });
+  if (landing) landAt(landing);
+}).catch(() => { if (landing) landAt(landing); });
+
+// my planet's song title lives on the server (fetched at creation); the local
+// copy predates it, so take it from the shared row once that arrives
+function adoptMineRow(row) {
+  const apply = () => {
+    if (!myPlanet) return false;
+    if (row.song) myPlanet.song = row.song;
+    if (row.message && !myPlanet.message) myPlanet.message = row.message;
+    return true;
+  };
+  if (apply()) return;
+  let tries = 0;
+  const iv = setInterval(() => { if (apply() || ++tries > 40) clearInterval(iv); }, 150);
+}
+
+// ---- fly a visitor to the planet whose address they opened ----
+// The camera is placed well outside the planet's system first so the arrival
+// is always a real flight: streaks, the sun resolving, orbit lines, then the
+// planet itself and whatever was left on it.
+function planetByKeys(keys) {
+  return field.planets.find((p) => keys.includes(normalizeNameKey(p.name))) || null;
+}
+async function landAt({ slug, keys }) {
+  // the visitor's own planet restores asynchronously; give it a moment
+  let planet = planetByKeys(keys);
+  for (let i = 0; !planet && i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    planet = planetByKeys(keys);
+  }
+  if (!planet) {
+    // not in the loaded field: gone (hidden/removed), never existed, or the
+    // universe is unavailable. Say so quietly and leave the visitor in the sky.
+    const looked = await fetchPlanetByName(nameFromSlug(slug));
+    clearTimeout(toastTimer);
+    toast.querySelector('.toast-name').textContent = looked.unavailable ? 'the universe is temporarily unavailable' : 'that world isn’t here';
+    toast.querySelector('.toast-sub').textContent = looked.unavailable ? 'try the link again in a moment' : 'it may have drifted away · make one instead';
+    toast.classList.add('show');
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 5200);
+    if (!looked.unavailable) window.history.replaceState(null, '', '/');
+    return;
+  }
+  if (travel.active || creator.isOpen()) return;
+  window.history.replaceState(null, '', `/p/${slugForName(planet.name)}`);
+  const star = env.getStar(planet.solarSystemId) ?? [...env.stars].sort(
+    (a, b) => a.position.distanceTo(planet.position) - b.position.distanceTo(planet.position)
+  )[0];
+  focus.clear();
+  if (star) {
+    // approach from far out, from a side that keeps the sun off-axis
+    const away = new THREE.Vector3(0.62, 0.28, 0.73).normalize();
+    camera.position.copy(star.position).addScaledVector(away, 5200);
+    controls.target.copy(star.position);
+  }
+  arriveMode = 'link';
+  if (!star || !travel.begin(planet, star)) focus.focus(planet);
+}
 
 // dev-only diagnostic (fps / draw calls / tris) — never shown to real visitors
 const perf = import.meta.env.DEV ? createPerfPanel({ renderer, field }) : { tick() {} };
@@ -567,7 +676,7 @@ setTimeout(() => document.getElementById('hint').classList.add('faded'), 8000);
 
 let elapsed = 0;
 const clock = new THREE.Clock();
-if (intro) intro.begin();
+if (intro) intro.begin({ skip: !!landing });
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -594,4 +703,4 @@ renderer.setAnimationLoop(() => {
 });
 
 // debug handle for testing in the console (harmless in a prototype)
-window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info, search, planetCard };
+window.__planets = { renderer, camera, controls, field, focus, creator, env, ambient, audio, travel, intro, info, search, planetCard, arrival, landAt };

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { buildPlanetVisual, deriveUserPlanet, makeSurfaceMaterial } from '../galaxy/planets.js';
 import { Painter } from './painter.js';
+import { parseSongLink, parseStart, MAX_MESSAGE_CHARS } from '../../lib/song.js';
 
 // The creation flow: draw -> make it yours -> preview -> launch.
 //
@@ -91,6 +92,24 @@ export function createCreator({ onLaunch, onPreview }) {
           <input class="name-input" maxlength="24" placeholder="name your planet" />
         </div>
         <p class="name-status"></p>
+
+        <div class="gift-group">
+          <label>make it for someone <span class="optional">(optional)</span></label>
+          <div class="gift-row">
+            <input class="song-input" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+              placeholder="paste a spotify or youtube link" />
+          </div>
+          <div class="start-row">
+            <label for="song-start">start it at</label>
+            <input id="song-start" class="song-start" inputmode="numeric" placeholder="0:00" maxlength="9" />
+          </div>
+          <p class="song-status"></p>
+          <div class="gift-row">
+            <input class="msg-input" maxlength="${MAX_MESSAGE_CHARS}" autocomplete="off"
+              placeholder="one line for whoever finds it" />
+          </div>
+          <p class="msg-count"></p>
+        </div>
         <div class="step-nav">
           <button class="btn-ghost btn-to-draw">back to drawing</button>
           <button class="btn-primary btn-to-preview">see your planet</button>
@@ -118,6 +137,56 @@ export function createCreator({ onLaunch, onPreview }) {
   const cursorEl = $('.brush-cursor');
   const nameInput = $('.name-input');
   nameInput.addEventListener('input', () => { const ns = $('.name-status'); if (ns) ns.textContent = ''; });
+
+  // ---------- a planet for someone: song link + start + one line ----------
+  const songInput = $('.song-input');
+  const songStart = $('.song-start');
+  const songStatus = $('.song-status');
+  const startRow = $('.start-row');
+  const msgInput = $('.msg-input');
+  const msgCount = $('.msg-count');
+  let song = null; // { provider, id, start } once a valid link is pasted
+
+  function refreshSong() {
+    const raw = songInput.value.trim();
+    if (!raw) {
+      song = null;
+      songInput.dataset.state = '';
+      songStatus.dataset.state = '';
+      songStatus.textContent = '';
+      startRow.dataset.show = '';
+      return;
+    }
+    const parsed = parseSongLink(raw);
+    if (!parsed) {
+      song = null;
+      songInput.dataset.state = 'bad';
+      songStatus.dataset.state = 'bad';
+      songStatus.textContent = 'that isn’t a spotify track or a youtube link';
+      startRow.dataset.show = '';
+      return;
+    }
+    // a start typed by hand wins over one carried in the link
+    const typed = songStart.value.trim();
+    song = { ...parsed, start: typed ? parseStart(typed) : parsed.start };
+    if (!typed && parsed.start) songStart.value = fmtStart(parsed.start);
+    songInput.dataset.state = 'ok';
+    songStatus.dataset.state = 'ok';
+    songStatus.textContent = parsed.provider === 'spotify'
+      ? 'spotify · full track for signed-in listeners, a preview for everyone else'
+      : 'youtube · plays for everyone';
+    startRow.dataset.show = '1';
+  }
+  const fmtStart = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  songInput.addEventListener('input', refreshSong);
+  songInput.addEventListener('paste', () => setTimeout(refreshSong, 0));
+  songStart.addEventListener('input', () => { if (song) song.start = parseStart(songStart.value); });
+  songStart.addEventListener('blur', () => { if (song) songStart.value = song.start ? fmtStart(song.start) : ''; });
+  msgInput.addEventListener('input', () => {
+    const n = msgInput.value.length;
+    msgCount.textContent = n ? `${n} / ${MAX_MESSAGE_CHARS}` : '';
+  });
+  const currentMessage = () => msgInput.value.replace(/\s+/g, ' ').trim().slice(0, MAX_MESSAGE_CHARS) || null;
 
   const painter = new Painter(CW, CH);
 
@@ -417,6 +486,12 @@ export function createCreator({ onLaunch, onPreview }) {
     for (const [k, el] of Object.entries(steps)) el.classList.toggle('hidden', k !== which);
     if (which === 'preview') {
       $('.preview-name').textContent = nameInput.value.trim() || 'a planet with no name yet';
+      const msg = currentMessage();
+      $('.step-preview .creator-sub').textContent = song && msg
+        ? 'it carries a song and your line · drag to turn it over'
+        : song ? 'it carries a song · drag to turn it over'
+          : msg ? 'it carries your line · drag to turn it over'
+            : 'drag to turn it over in your hands';
       buildPreviewPlanet();
       startPreview();
       if (onPreview) onPreview();
@@ -461,7 +536,7 @@ export function createCreator({ onLaunch, onPreview }) {
     launchBtn.textContent = 'launching…';
     statusEl.textContent = '';
 
-    const result = await onLaunch({ name, canvas: copy, derived });
+    const result = await onLaunch({ name, canvas: copy, derived, song, message: currentMessage() });
 
     launching = false;
     launchBtn.disabled = false;
@@ -476,7 +551,7 @@ export function createCreator({ onLaunch, onPreview }) {
       return;
     }
     if (result && result.planetLimitReached) {
-      statusEl.textContent = 'this network has already made its planet.';
+      statusEl.textContent = 'this network already made a planet today. another tomorrow.';
       return;
     }
     if (result && result.failed) {
@@ -494,6 +569,11 @@ export function createCreator({ onLaunch, onPreview }) {
     painter.redoStack.length = 0;
     painter.markDirty();
     nameInput.value = '';
+    songInput.value = '';
+    songStart.value = '';
+    msgInput.value = '';
+    msgCount.textContent = '';
+    refreshSong();
     statusEl.textContent = '';
   });
 

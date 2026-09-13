@@ -23,6 +23,11 @@ export class FocusController {
     this._v = new THREE.Vector3();
     this._trackPos = new THREE.Vector3();
     this._delta = new THREE.Vector3();
+    this.onArrive = null; // (planet) => {} once the flight to a planet completes
+    this.onLeave = null;  // () => {} when the focused planet is let go
+    // when an arrival panel will sit under the planet, frame it higher so the
+    // world and its line share the screen instead of fighting for it
+    this.liftFor = () => false; // (planet) => boolean
   }
 
   focus(planet) {
@@ -35,13 +40,20 @@ export class FocusController {
     const ringSpan = planet.look && planet.look.rings ? planet.look.rings.outer : 1;
     const dist = planet.scale * (3.4 + ringSpan * 1.1) + 1.5;
     const camTo = target.clone().addScaledVector(dir, dist).add(new THREE.Vector3(0, planet.scale * 0.7, 0));
+    const tgtTo = target.clone();
+    if (this.liftFor(planet)) {
+      // look a little below the planet: it rises into the upper half of the frame
+      const lift = planet.scale * 1.15 + ringSpan * 0.4;
+      tgtTo.y -= lift;
+      camTo.y -= lift * 0.55;
+    }
     this.anim = {
       t: 0,
       dur: Math.min(5, 1.2 + this.camera.position.distanceTo(camTo) / 4000),
       camFrom: this.camera.position.clone(),
       camTo,
       tgtFrom: this.controls.target.clone(),
-      tgtTo: target,
+      tgtTo,
     };
     this.controls.enabled = false;
     this.controls.minDistance = Math.max(3, planet.scale * 1.4); // can't dolly inside it
@@ -82,8 +94,10 @@ export class FocusController {
   }
 
   clear() {
+    const had = this.current;
     this.current = null;
     this.anim = null;
+    if (had && this.onLeave) this.onLeave(had);
     this.controls.enabled = true;
     this.controls.minDistance = 3;
     this.labelEl.classList.add('label-hidden');
@@ -118,6 +132,7 @@ export class FocusController {
       if (a.t >= 1) {
         this.anim = null;
         this.controls.enabled = true;
+        if (this.current && this.onArrive) this.onArrive(this.current);
       }
     }
     if (this.current) {

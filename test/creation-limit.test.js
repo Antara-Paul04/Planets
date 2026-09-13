@@ -212,3 +212,32 @@ test('9. reporting identity is separate from and unaffected by the creation iden
   assert.match(hashReporterIp(ip), /^[0-9a-f]{32}$/);
   assert.equal(hashReporterIp(ip), hashReporterIp(ip));
 });
+
+// ---------------------------------------------------------------------------
+// The limit is per network per DAY (migration 005): tomorrow the same network
+// can make another planet. Names stay unique forever.
+// ---------------------------------------------------------------------------
+
+test('D1. the same network can create again on a different day', () => {
+  const u = createUniverse();
+  assert.equal(u.attemptCreate({ clientRef: 'd1', creatorHash: A, name: 'monday', candidates: star(0), day: '2026-09-14' }).ok, true);
+  assert.equal(u.attemptCreate({ clientRef: 'd2', creatorHash: A, name: 'monday again', candidates: star(0), day: '2026-09-14' }).planetLimitReached, true);
+  assert.equal(u.attemptCreate({ clientRef: 'd3', creatorHash: A, name: 'tuesday', candidates: star(0), day: '2026-09-15' }).ok, true);
+  assert.equal(u.planetCount(), 2);
+  assert.equal(u.creatorHasPlanet(A, '2026-09-14'), true);
+  assert.equal(u.creatorHasPlanet(A, '2026-09-16'), false);
+});
+
+test('D2. a concurrent same-day insert still trips the limit; a different-day one does not', () => {
+  const u = createUniverse();
+  const raced = u.attemptCreate({
+    clientRef: 'r1', creatorHash: A, name: 'raced', candidates: star(0), day: '2026-09-14',
+    _beforeInsert: ({ inject }) => inject({ clientRef: 'other', creatorHash: A, name: 'first', day: '2026-09-14' }),
+  });
+  assert.equal(raced.planetLimitReached, true);
+  const fine = u.attemptCreate({
+    clientRef: 'r2', creatorHash: A, name: 'fine', candidates: star(0), day: '2026-09-15',
+    _beforeInsert: ({ inject }) => inject({ clientRef: 'other2', creatorHash: A, name: 'yesterday', day: '2026-09-14' }),
+  });
+  assert.equal(fine.ok, true);
+});

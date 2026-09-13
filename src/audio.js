@@ -150,8 +150,15 @@ export class Soundscape {
   }
   _setMaster() {
     if (!this.ctx || !this.enabled) return;
-    // deliberately quiet even at full volume
-    this.master.gain.setTargetAtTime(0.16 * this.pref.vol, this.ctx.currentTime, 1.2);
+    // deliberately quiet even at full volume; ducked further under a planet's song
+    const duck = this._ducked ? 0.22 : 1;
+    this.master.gain.setTargetAtTime(0.16 * this.pref.vol * duck, this.ctx.currentTime, this._ducked ? 0.5 : 1.6);
+  }
+  // a planet's own song is playing: the soundscape steps back, and returns after
+  duck(on) {
+    if (this._ducked === !!on) return;
+    this._ducked = !!on;
+    this._setMaster();
   }
   _save() {
     try { localStorage.setItem(PREF_KEY, JSON.stringify(this.pref)); } catch { /* fine */ }

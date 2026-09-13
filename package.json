@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --test",
+    "dev:api": "node scripts/dev-api.mjs"
   },
   "dependencies": {
+    "@vercel/og": "^0.6.8",
     "three": "^0.170.0"
   },
   "devDependencies": {
